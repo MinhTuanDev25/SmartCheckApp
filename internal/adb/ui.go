@@ -74,13 +74,59 @@ func (c *Client) HasAnyLabel(labels ...string) (bool, error) {
 	return false, nil
 }
 
-// TapByLabelContains taps the first element whose text/content-desc contains substr.
+// HasAnyLabelContains returns true if any label substring appears in text/content-desc.
+func (c *Client) HasAnyLabelContains(substrs ...string) (bool, error) {
+	dump, err := c.DumpUI(5)
+	if err != nil {
+		return false, err
+	}
+	for _, substr := range substrs {
+		if _, _, ok := findLabelContainsCenter(dump, substr); ok {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// WaitForAnyLabelContains polls until any substring appears or timeout.
+func (c *Client) WaitForAnyLabelContains(timeout time.Duration, substrs ...string) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		ok, err := c.HasAnyLabelContains(substrs...)
+		if err != nil {
+			return err
+		}
+		if ok {
+			return nil
+		}
+		c.Sleep(2 * time.Second)
+	}
+	return fmt.Errorf("timeout waiting for labels containing %v", substrs)
+}
+
+// WaitUntilLabelGone polls until exact label is no longer on screen.
+func (c *Client) WaitUntilLabelGone(label string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		ok, err := c.HasLabel(label)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return nil
+		}
+		c.Sleep(2 * time.Second)
+	}
+	return fmt.Errorf("timeout waiting for %q to disappear", label)
+}
+
+// TapByLabelContains taps the best matching element (prefers clickable nodes).
 func (c *Client) TapByLabelContains(substr string) (int, int, error) {
 	dump, err := c.DumpUI(5)
 	if err != nil {
 		return 0, 0, err
 	}
-	x, y, found := findLabelContainsCenter(dump, substr)
+	x, y, found := findLabelContainsCenterPreferClickable(dump, substr)
 	if !found {
 		return 0, 0, fmt.Errorf("label containing %q not found on screen", substr)
 	}
@@ -92,11 +138,35 @@ func (c *Client) TapByLabel(label string) (int, int, error) {
 	if err != nil {
 		return 0, 0, err
 	}
-	x, y, found := findLabelCenter(dump, label)
+	x, y, found := findLabelCenterPreferClickable(dump, label)
 	if !found {
 		return 0, 0, fmt.Errorf("label %q not found on screen", label)
 	}
 	return x, y, c.Tap(x, y)
+}
+
+// TapByLabelOrCoords tries label tap first, then falls back to fixed coordinates.
+func (c *Client) TapByLabelOrCoords(label string, fallbackX, fallbackY int) (int, int, error) {
+	x, y, err := c.TapByLabel(label)
+	if err == nil {
+		return x, y, nil
+	}
+	if err := c.Tap(fallbackX, fallbackY); err != nil {
+		return 0, 0, err
+	}
+	return fallbackX, fallbackY, nil
+}
+
+// TapByLabelContainsOrCoords tries contains-match tap first, then fixed coordinates.
+func (c *Client) TapByLabelContainsOrCoords(substr string, fallbackX, fallbackY int) (int, int, error) {
+	x, y, err := c.TapByLabelContains(substr)
+	if err == nil {
+		return x, y, nil
+	}
+	if err := c.Tap(fallbackX, fallbackY); err != nil {
+		return 0, 0, err
+	}
+	return fallbackX, fallbackY, nil
 }
 
 func findLabelCenter(dump, label string) (int, int, bool) {
@@ -177,6 +247,153 @@ func findLabelContainsCenter(dump, substr string) (int, int, bool) {
 
 func labelContains(value, target string) bool {
 	return strings.Contains(strings.ToLower(strings.TrimSpace(value)), target)
+}
+
+type uiMatch struct {
+	x, y, area int
+	clickable  bool
+	exact      bool
+}
+
+func findLabelCenterPreferClickable(dump, label string) (int, int, bool) {
+	var matches []uiMatch
+	decoder := xml.NewDecoder(strings.NewReader(dump))
+	for {
+		tok, err := decoder.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return 0, 0, false
+		}
+		se, ok := tok.(xml.StartElement)
+		if !ok || se.Name.Local != "node" {
+			continue
+		}
+		text, desc, bounds, clickable := readNodeAttrs(se)
+		val := displayValue(text, desc)
+		if !strings.EqualFold(val, label) {
+			continue
+		}
+		x, y, ok := boundsCenter(bounds)
+		if !ok {
+			continue
+		}
+		matches = append(matches, uiMatch{
+			x: x, y: y, area: boundsArea(bounds),
+			clickable: clickable == "true",
+			exact:     strings.EqualFold(val, label),
+		})
+	}
+	return pickBestMatch(matches)
+}
+
+func findLabelContainsCenterPreferClickable(dump, substr string) (int, int, bool) {
+	target := strings.ToLower(strings.TrimSpace(substr))
+	var matches []uiMatch
+	decoder := xml.NewDecoder(strings.NewReader(dump))
+	for {
+		tok, err := decoder.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return 0, 0, false
+		}
+		se, ok := tok.(xml.StartElement)
+		if !ok || se.Name.Local != "node" {
+			continue
+		}
+		text, desc, bounds, clickable := readNodeAttrs(se)
+		if !labelContains(text, target) && !labelContains(desc, target) {
+			continue
+		}
+		x, y, ok := boundsCenter(bounds)
+		if !ok {
+			continue
+		}
+		val := displayValue(text, desc)
+		matches = append(matches, uiMatch{
+			x: x, y: y, area: boundsArea(bounds),
+			clickable: clickable == "true",
+			exact:     strings.EqualFold(val, substr) || strings.EqualFold(val, strings.ToUpper(substr)),
+		})
+	}
+	return pickBestMatch(matches)
+}
+
+func readNodeAttrs(se xml.StartElement) (text, desc, bounds, clickable string) {
+	for _, attr := range se.Attr {
+		switch attr.Name.Local {
+		case "text":
+			text = strings.TrimSpace(attr.Value)
+		case "content-desc":
+			desc = strings.TrimSpace(attr.Value)
+		case "bounds":
+			bounds = attr.Value
+		case "clickable":
+			clickable = attr.Value
+		}
+	}
+	return text, desc, bounds, clickable
+}
+
+func displayValue(text, desc string) string {
+	if text != "" {
+		return text
+	}
+	return desc
+}
+
+func pickBestMatch(matches []uiMatch) (int, int, bool) {
+	if len(matches) == 0 {
+		return 0, 0, false
+	}
+	best := matches[0]
+	bestScore := matchScore(best)
+	for _, m := range matches[1:] {
+		if s := matchScore(m); s > bestScore {
+			best = m
+			bestScore = s
+		}
+	}
+	return best.x, best.y, true
+}
+
+// Prefer clickable + exact label + smaller bounds (button-sized, not full-width container).
+func matchScore(m uiMatch) int {
+	score := 0
+	if m.clickable {
+		score += 100
+	}
+	if m.exact {
+		score += 80
+	}
+	if m.area > 0 && m.area < 500000 {
+		score += 20
+	}
+	score -= m.area / 5000
+	return score
+}
+
+func boundsArea(bounds string) int {
+	m := boundsRe.FindStringSubmatch(bounds)
+	if len(m) != 5 {
+		return 0
+	}
+	x1, _ := strconv.Atoi(m[1])
+	y1, _ := strconv.Atoi(m[2])
+	x2, _ := strconv.Atoi(m[3])
+	y2, _ := strconv.Atoi(m[4])
+	w := x2 - x1
+	h := y2 - y1
+	if w < 0 {
+		w = -w
+	}
+	if h < 0 {
+		h = -h
+	}
+	return w * h
 }
 
 func boundsCenter(bounds string) (int, int, bool) {

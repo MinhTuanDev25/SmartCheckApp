@@ -23,10 +23,17 @@ const (
 const AppLabel = "People HDBank"
 
 const (
-	WifiMenuLabel   = "Chấm công Wifi"  // nút trên màn hình chính app
-	WifiScreenTitle = "Chấm công WIFI"  // tiêu đề màn hình chấm công
+	WifiMenuLabel   = "Chấm công Wifi" // nút trên màn hình chính app
+	WifiScreenTitle = "Chấm công WIFI" // tiêu đề màn hình chấm công
 	PINFieldLabel   = "Nhập mã pin"
 	ConfirmLabel    = "XÁC NHẬN"
+)
+
+// Fallback tọa độ từ uiautomator dump (Samsung SM-X406B 1320×2112).
+var (
+	CheckInButton  = [2]int{356, 755}  // CHECK-IN [80,725][632,786]
+	CheckOutButton = [2]int{964, 755}  // CHECK-OUT [688,725][1240,786]
+	ConfirmButton  = [2]int{1063, 1119} // XÁC NHẬN popup
 )
 
 type Runner struct {
@@ -116,31 +123,46 @@ func (r *Runner) run(action string) (err error) {
 	fmt.Printf("[%s] tapped %s at (%d, %d)\n", action, WifiMenuLabel, x, y)
 	r.wait()
 
-	onWifi, err := r.adb.HasAnyLabel(WifiScreenTitle, "CHECK-IN", "CHECK-OUT")
+	onWifi, err := r.adb.HasAnyLabelContains("chấm công wifi", "check-in", "check-out")
 	if err != nil {
 		return fmt.Errorf("verify wifi screen: %w", err)
 	}
 	if !onWifi {
-		return fmt.Errorf("wifi attendance screen not opened (expected %q or CHECK-IN/CHECK-OUT)", WifiScreenTitle)
+		return fmt.Errorf("wifi attendance screen not opened (expected wifi title or CHECK-IN/CHECK-OUT)")
 	}
 	fmt.Printf("[%s] on wifi attendance screen\n", action)
 
 	if EnableAttendanceAction {
 		checkLabel := "CHECK-IN"
+		checkSubstr := "check-in"
+		fallback := CheckInButton
 		if action == "check-out" {
 			checkLabel = "CHECK-OUT"
+			checkSubstr = "check-out"
+			fallback = CheckOutButton
 		}
 		fmt.Printf("[%s] tapping %s...\n", action, checkLabel)
-		if _, _, err := r.adb.TapByLabel(checkLabel); err != nil {
+		x, y, err := r.adb.TapByLabelOrCoords(checkLabel, fallback[0], fallback[1])
+		if err != nil {
+			x, y, err = r.adb.TapByLabelContainsOrCoords(checkSubstr, fallback[0], fallback[1])
+		}
+		if err != nil {
 			return fmt.Errorf("tap %s: %w", checkLabel, err)
 		}
+		fmt.Printf("[%s] tapped %s at (%d, %d)\n", action, checkLabel, x, y)
 		r.wait()
 
 		if EnableConfirmAction {
+			fmt.Printf("[%s] waiting for confirm popup...\n", action)
+			if err := r.adb.WaitForAnyLabelContains(15*time.Second, "xác nhận", "nhận"); err != nil {
+				return fmt.Errorf("confirm popup: %w", err)
+			}
 			fmt.Printf("[%s] confirming popup...\n", action)
-			if _, _, err := r.adb.TapByLabelContains(ConfirmLabel); err != nil {
+			x, y, err := r.adb.TapByLabelContainsOrCoords("xác nhận", ConfirmButton[0], ConfirmButton[1])
+			if err != nil {
 				return fmt.Errorf("tap confirm: %w", err)
 			}
+			fmt.Printf("[%s] tapped confirm at (%d, %d)\n", action, x, y)
 			r.wait()
 		} else {
 			fmt.Printf("[%s] skip confirm (disabled)\n", action)
