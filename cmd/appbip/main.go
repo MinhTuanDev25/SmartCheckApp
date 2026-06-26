@@ -77,7 +77,7 @@ Usage:
   appbip check-out
   appbip schedule
 
-Schedule (mặc định giờ VN, Asia/Ho_Chi_Minh):
+Schedule (mặc định giờ VN, Asia/Ho_Chi_Minh, chỉ thứ 2–thứ 6):
   07:50  check-in lần 1
   08:05  check-in lần 2
   17:00  check-out lần 1

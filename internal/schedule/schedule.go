@@ -9,12 +9,12 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-// Default jobs: check-in x2 buổi sáng, check-out x2 buổi chiều (giờ VN).
+// Default jobs: check-in x2 buổi sáng, check-out x2 buổi chiều (giờ VN, T2–T6).
 var DefaultJobs = []Job{
-	{Label: "check-in lần 1", Cron: "50 7 * * *", Action: "check-in"},
-	{Label: "check-in lần 2", Cron: "5 8 * * *", Action: "check-in"},
-	{Label: "check-out lần 1", Cron: "0 17 * * *", Action: "check-out"},
-	{Label: "check-out lần 2", Cron: "0 18 * * *", Action: "check-out"},
+	{Label: "check-in lần 1", Cron: "50 7 * * 1-5", Action: "check-in"},
+	{Label: "check-in lần 2", Cron: "5 8 * * 1-5", Action: "check-in"},
+	{Label: "check-out lần 1", Cron: "0 17 * * 1-5", Action: "check-out"},
+	{Label: "check-out lần 2", Cron: "0 18 * * 1-5", Action: "check-out"},
 }
 
 type Job struct {
@@ -47,7 +47,7 @@ func Run(runner Runner) error {
 	}
 
 	c.Start()
-	fmt.Println("appbip schedule running — Ctrl+C to stop")
+	fmt.Println("appbip schedule running (Mon–Fri only) — Ctrl+C to stop")
 	select {}
 }
 

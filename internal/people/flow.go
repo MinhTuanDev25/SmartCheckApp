@@ -153,16 +153,9 @@ func (r *Runner) run(action string) (err error) {
 		r.wait()
 
 		if EnableConfirmAction {
-			fmt.Printf("[%s] waiting for confirm popup...\n", action)
-			if err := r.adb.WaitForAnyLabelContains(15*time.Second, "xác nhận", "nhận"); err != nil {
-				return fmt.Errorf("confirm popup: %w", err)
+			if err := r.tapConfirm(action); err != nil {
+				return err
 			}
-			fmt.Printf("[%s] confirming popup...\n", action)
-			x, y, err := r.adb.TapByLabelContainsOrCoords("xác nhận", ConfirmButton[0], ConfirmButton[1])
-			if err != nil {
-				return fmt.Errorf("tap confirm: %w", err)
-			}
-			fmt.Printf("[%s] tapped confirm at (%d, %d)\n", action, x, y)
 			r.wait()
 		} else {
 			fmt.Printf("[%s] skip confirm (disabled)\n", action)
@@ -222,4 +215,61 @@ func (r *Runner) emergencyCleanup(action string, cause error) {
 
 func (r *Runner) wait() {
 	r.adb.Sleep(StepDelay)
+}
+
+func (r *Runner) tapConfirm(action string) error {
+	fmt.Printf("[%s] waiting for confirm popup...\n", action)
+	r.adb.Sleep(3 * time.Second)
+
+	if err := r.adb.WaitForConfirmPopup(20 * time.Second); err != nil {
+		fmt.Printf("[%s] warn: %v — tapping known confirm coords\n", action, err)
+	}
+
+	attempts := [][2]int{
+		ConfirmButton,
+		{940, 1119},
+		{1100, 1080},
+	}
+	for i, pt := range attempts {
+		fmt.Printf("[%s] confirm attempt %d at (%d, %d)\n", action, i+1, pt[0], pt[1])
+		if err := r.adb.Tap(pt[0], pt[1]); err != nil {
+			return fmt.Errorf("tap confirm: %w", err)
+		}
+		r.adb.Sleep(4 * time.Second)
+
+		if ok, _ := r.adb.HasAnyLabelContains("thành công"); ok {
+			fmt.Printf("[%s] attendance confirmed (success message)\n", action)
+			return nil
+		}
+
+		btnX, btnY, hasBtn, err := r.adb.FindConfirmButton()
+		if err != nil {
+			return fmt.Errorf("find confirm button: %w", err)
+		}
+		if !hasBtn {
+			fmt.Printf("[%s] confirm popup dismissed\n", action)
+			return nil
+		}
+
+		fmt.Printf("[%s] popup still open, trying label tap at (%d, %d)\n", action, btnX, btnY)
+		if err := r.adb.Tap(btnX, btnY); err != nil {
+			return fmt.Errorf("tap confirm label: %w", err)
+		}
+		r.adb.Sleep(4 * time.Second)
+
+		if ok, _ := r.adb.HasAnyLabelContains("thành công"); ok {
+			fmt.Printf("[%s] attendance confirmed (success message)\n", action)
+			return nil
+		}
+		_, _, still, err := r.adb.FindConfirmButton()
+		if err != nil {
+			return fmt.Errorf("find confirm button: %w", err)
+		}
+		if !still {
+			fmt.Printf("[%s] confirm popup dismissed after label tap\n", action)
+			return nil
+		}
+	}
+
+	return fmt.Errorf("confirm popup still open after %d attempts", len(attempts))
 }

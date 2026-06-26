@@ -169,6 +169,81 @@ func (c *Client) TapByLabelContainsOrCoords(substr string, fallbackX, fallbackY 
 	return fallbackX, fallbackY, nil
 }
 
+func findConfirmButtonCenter(dump string) (int, int, bool) {
+	const minY = 850 // popup button zone on SM-X406B
+	var matches []uiMatch
+	decoder := xml.NewDecoder(strings.NewReader(dump))
+	for {
+		tok, err := decoder.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return 0, 0, false
+		}
+		se, ok := tok.(xml.StartElement)
+		if !ok || se.Name.Local != "node" {
+			continue
+		}
+		text, desc, bounds, clickable := readNodeAttrs(se)
+		val := displayValue(text, desc)
+		if !isConfirmButtonText(val) {
+			continue
+		}
+		x, y, ok := boundsCenter(bounds)
+		if !ok || y < minY {
+			continue
+		}
+		matches = append(matches, uiMatch{
+			x: x, y: y, area: boundsArea(bounds),
+			clickable: clickable == "true",
+			exact:     true,
+		})
+	}
+	return pickBestMatch(matches)
+}
+
+func isConfirmButtonText(value string) bool {
+	s := strings.ToLower(strings.TrimSpace(value))
+	if s == "" || len(s) > 30 {
+		return false
+	}
+	return s == "xác nhận" ||
+		s == "xac nhan" ||
+		s == "đồng ý" ||
+		s == "dong y" ||
+		s == "ok" ||
+		strings.Contains(s, "xác nhận")
+}
+
+// WaitForConfirmPopup waits for a confirm button in the lower dialog area.
+func (c *Client) WaitForConfirmPopup(timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if _, _, ok, err := c.findConfirmButton(); err != nil {
+			return err
+		} else if ok {
+			return nil
+		}
+		c.Sleep(2 * time.Second)
+	}
+	return fmt.Errorf("confirm popup not detected")
+}
+
+// FindConfirmButton locates the confirm button in the popup dialog.
+func (c *Client) FindConfirmButton() (int, int, bool, error) {
+	return c.findConfirmButton()
+}
+
+func (c *Client) findConfirmButton() (int, int, bool, error) {
+	dump, err := c.DumpUI(5)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	x, y, ok := findConfirmButtonCenter(dump)
+	return x, y, ok, nil
+}
+
 func findLabelCenter(dump, label string) (int, int, bool) {
 	target := strings.TrimSpace(label)
 	decoder := xml.NewDecoder(strings.NewReader(dump))
