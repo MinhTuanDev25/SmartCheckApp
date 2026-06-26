@@ -52,15 +52,19 @@ func main() {
 }
 
 func newRunner() (*people.Runner, error) {
+	adbBin := os.Getenv("APPBIP_ADB")
+	if adbBin == "" {
+		adbBin = "adb"
+	}
 	device := os.Getenv("APPBIP_DEVICE")
-	client := adb.New("adb", device)
+	client := adb.New(adbBin, device)
 	if device == "" {
 		var err error
 		device, err = client.FirstDevice()
 		if err != nil {
 			return nil, err
 		}
-		client = adb.New("adb", device)
+		client = adb.New(adbBin, device)
 	}
 	return people.NewRunner(client), nil
 }
@@ -80,6 +84,7 @@ Schedule (mặc định giờ VN, Asia/Ho_Chi_Minh):
   18:00  check-out lần 2
 
 Env:
+  APPBIP_ADB     Đường dẫn adb.exe (nếu chưa có trong PATH)
   APPBIP_DEVICE  ADB device serial (optional)
   APPBIP_PIN     PIN mặc định 123456
   APPBIP_TZ      Timezone (mặc định Asia/Ho_Chi_Minh)`)
