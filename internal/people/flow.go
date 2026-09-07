@@ -3,6 +3,7 @@ package people
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/appbip/appbip/internal/adb"
@@ -12,8 +13,9 @@ const (
 	Package    = "com.people.fis.hdbank.pro"
 	DefaultPIN = "123456"
 
-	ScreenWidth  = 1320
-	ScreenHeight = 2112
+	// Samsung SM-P619 (Galaxy Tab S6 Lite 2022)
+	ScreenWidth  = 1200
+	ScreenHeight = 2000
 	StepDelay    = 5 * time.Second
 
 	EnableAttendanceAction = true
@@ -29,11 +31,11 @@ const (
 	ConfirmLabel    = "XÁC NHẬN"
 )
 
-// Fallback tọa độ từ uiautomator dump (Samsung SM-X406B 1320×2112).
+// Fallback tọa độ (Samsung SM-P619 1200×2000; scaled from SM-X406B dump).
 var (
-	CheckInButton  = [2]int{356, 755}  // CHECK-IN [80,725][632,786]
-	CheckOutButton = [2]int{964, 755}  // CHECK-OUT [688,725][1240,786]
-	ConfirmButton  = [2]int{1063, 1119} // XÁC NHẬN popup
+	CheckInButton  = [2]int{324, 715}
+	CheckOutButton = [2]int{876, 715}
+	ConfirmButton  = [2]int{966, 1060}
 )
 
 type Runner struct {
@@ -123,31 +125,31 @@ func (r *Runner) run(action string) (err error) {
 	fmt.Printf("[%s] tapped %s at (%d, %d)\n", action, WifiMenuLabel, x, y)
 	r.wait()
 
-	onWifi, err := r.adb.HasAnyLabelContains("chấm công wifi", "check-in", "check-out")
+	checkLabel := "CHECK-IN"
+	checkSubstr := "check-in"
+	if action == "check-out" {
+		checkLabel = "CHECK-OUT"
+		checkSubstr = "check-out"
+	}
+
+	// Bắt buộc thấy nút CHECK-IN/OUT — không chỉ thấy tiêu đề wifi rồi chạy tiếp.
+	hasBtn, err := r.adb.HasAnyLabelContains(checkSubstr, strings.ToLower(checkLabel))
 	if err != nil {
 		return fmt.Errorf("verify wifi screen: %w", err)
 	}
-	if !onWifi {
-		return fmt.Errorf("wifi attendance screen not opened (expected wifi title or CHECK-IN/CHECK-OUT)")
+	if !hasBtn {
+		return fmt.Errorf("%s button not on wifi screen — abort so next schedule can retry", checkLabel)
 	}
-	fmt.Printf("[%s] on wifi attendance screen\n", action)
+	fmt.Printf("[%s] on wifi attendance screen (found %s)\n", action, checkLabel)
 
 	if EnableAttendanceAction {
-		checkLabel := "CHECK-IN"
-		checkSubstr := "check-in"
-		fallback := CheckInButton
-		if action == "check-out" {
-			checkLabel = "CHECK-OUT"
-			checkSubstr = "check-out"
-			fallback = CheckOutButton
-		}
 		fmt.Printf("[%s] tapping %s...\n", action, checkLabel)
-		x, y, err := r.adb.TapByLabelOrCoords(checkLabel, fallback[0], fallback[1])
+		x, y, err := r.adb.TapByLabel(checkLabel)
 		if err != nil {
-			x, y, err = r.adb.TapByLabelContainsOrCoords(checkSubstr, fallback[0], fallback[1])
+			x, y, err = r.adb.TapByLabelContains(checkSubstr)
 		}
 		if err != nil {
-			return fmt.Errorf("tap %s: %w", checkLabel, err)
+			return fmt.Errorf("tap %s failed (no fallback coords): %w", checkLabel, err)
 		}
 		fmt.Printf("[%s] tapped %s at (%d, %d)\n", action, checkLabel, x, y)
 		r.wait()
@@ -165,35 +167,7 @@ func (r *Runner) run(action string) (err error) {
 	}
 
 	fmt.Printf("[%s] force stopping app...\n", action)
-	if err := r.adb.ForceStop(Package); err != nil {
-		return err
-	}
-	r.wait()
-
-	fmt.Printf("[%s] opening recents...\n", action)
-	if err := r.adb.Home(); err != nil {
-		return err
-	}
-	r.wait()
-	if err := r.adb.Tap(adb.RecentsButtonX, adb.RecentsButtonY); err != nil {
-		return err
-	}
-	r.wait()
-
-	fmt.Printf("[%s] removing app from recents...\n", action)
-	if err := r.adb.Swipe(adb.RecentsCardSwipeFromX, adb.RecentsCardSwipeFromY, adb.RecentsCardSwipeFromX, adb.RecentsCardSwipeToY, 400); err != nil {
-		return err
-	}
-	r.wait()
-
-	fmt.Printf("[%s] back to home...\n", action)
-	if err := r.adb.Home(); err != nil {
-		return err
-	}
-	r.wait()
-
-	fmt.Printf("[%s] putting tablet to sleep...\n", action)
-	if err := r.adb.ScreenOff(); err != nil {
+	if err := r.resetToCleanState(action); err != nil {
 		return err
 	}
 
@@ -201,28 +175,75 @@ func (r *Runner) run(action string) (err error) {
 	return nil
 }
 
-// emergencyCleanup force-stops the app and sleeps the tablet after any failed step.
-// Best-effort: always tries to reset device state before the next scheduled run.
+// emergencyCleanup resets tablet to a clean idle state after any failed step.
+// Schedule keeps running — next job will try again. Never leaves People app open.
 func (r *Runner) emergencyCleanup(action string, cause error) {
-	fmt.Printf("[%s] failed: %v\n", action, cause)
-	fmt.Printf("[%s] emergency cleanup — force stop app...\n", action)
+	fmt.Printf("[%s] step skipped: %v\n", action, cause)
+	fmt.Printf("[%s] cleanup — về Home + xóa đa nhiệm, chờ lần schedule sau...\n", action)
+	_ = r.resetToCleanState(action)
+	fmt.Printf("[%s] cleanup done — schedule sẽ chạy tiếp bình thường\n", action)
+}
+
+// resetToCleanState: force-stop → Home → ||| → Đóng tất cả → Home → sleep.
+func (r *Runner) resetToCleanState(action string) error {
 	_ = r.adb.ForceStop(Package)
+	r.adb.Sleep(1 * time.Second)
+
+	if err := r.adb.Home(); err != nil {
+		return err
+	}
+	r.wait()
+
+	fmt.Printf("[%s] opening recents (tap |||)...\n", action)
+	if err := r.adb.OpenRecentsByNavTap(); err != nil {
+		_ = r.adb.OpenRecents()
+	}
+	r.wait()
+
+	fmt.Printf("[%s] clearing recents...\n", action)
+	_ = r.clearRecents(action)
+	r.wait()
+
+	fmt.Printf("[%s] back to home...\n", action)
 	_ = r.adb.Home()
-	fmt.Printf("[%s] emergency cleanup — putting tablet to sleep...\n", action)
+	r.wait()
+
+	fmt.Printf("[%s] putting tablet to sleep...\n", action)
 	_ = r.adb.ScreenOff()
-	fmt.Printf("[%s] cleanup done — will retry at next scheduled time\n", action)
+	return nil
 }
 
 func (r *Runner) wait() {
 	r.adb.Sleep(StepDelay)
 }
 
+// clearRecents dismisses overview apps on SM-P619 One UI.
+// Prefer "Đóng tất cả"; else swipe the card area upward.
+func (r *Runner) clearRecents(action string) error {
+	if x, y, err := r.adb.TapByLabel("Đóng tất cả"); err == nil {
+		fmt.Printf("[%s] tapped Đóng tất cả at (%d, %d)\n", action, x, y)
+		return nil
+	}
+	if x, y, err := r.adb.TapByLabelContains("Đóng tất cả"); err == nil {
+		fmt.Printf("[%s] tapped Đóng tất cả (contains) at (%d, %d)\n", action, x, y)
+		return nil
+	}
+	if x, y, err := r.adb.TapByLabelContains("Clear all"); err == nil {
+		fmt.Printf("[%s] tapped Clear all at (%d, %d)\n", action, x, y)
+		return nil
+	}
+
+	// Fallback: swipe People HDBank card region up (SM-P619 card ~[636,259][975,835]).
+	fmt.Printf("[%s] Đóng tất cả not found — swipe card up\n", action)
+	return r.adb.Swipe(805, 650, 805, 80, 450)
+}
+
 func (r *Runner) tapConfirm(action string) error {
 	fmt.Printf("[%s] waiting for confirm popup...\n", action)
 	r.adb.Sleep(3 * time.Second)
 
-	if err := r.adb.WaitForConfirmPopup(20 * time.Second); err != nil {
-		fmt.Printf("[%s] warn: %v — tapping known confirm coords\n", action, err)
+	if err := r.adb.WaitForConfirmPopup(15 * time.Second); err != nil {
+		return fmt.Errorf("confirm popup not shown after attendance tap — abort: %w", err)
 	}
 
 	attempts := [][2]int{
@@ -231,29 +252,20 @@ func (r *Runner) tapConfirm(action string) error {
 		{1100, 1080},
 	}
 	for i, pt := range attempts {
-		fmt.Printf("[%s] confirm attempt %d at (%d, %d)\n", action, i+1, pt[0], pt[1])
-		if err := r.adb.Tap(pt[0], pt[1]); err != nil {
-			return fmt.Errorf("tap confirm: %w", err)
-		}
-		r.adb.Sleep(4 * time.Second)
-
-		if ok, _ := r.adb.HasAnyLabelContains("thành công"); ok {
-			fmt.Printf("[%s] attendance confirmed (success message)\n", action)
-			return nil
-		}
-
 		btnX, btnY, hasBtn, err := r.adb.FindConfirmButton()
 		if err != nil {
 			return fmt.Errorf("find confirm button: %w", err)
 		}
-		if !hasBtn {
-			fmt.Printf("[%s] confirm popup dismissed\n", action)
-			return nil
-		}
-
-		fmt.Printf("[%s] popup still open, trying label tap at (%d, %d)\n", action, btnX, btnY)
-		if err := r.adb.Tap(btnX, btnY); err != nil {
-			return fmt.Errorf("tap confirm label: %w", err)
+		if hasBtn {
+			fmt.Printf("[%s] confirm attempt %d via label at (%d, %d)\n", action, i+1, btnX, btnY)
+			if err := r.adb.Tap(btnX, btnY); err != nil {
+				return fmt.Errorf("tap confirm label: %w", err)
+			}
+		} else {
+			fmt.Printf("[%s] confirm attempt %d at (%d, %d)\n", action, i+1, pt[0], pt[1])
+			if err := r.adb.Tap(pt[0], pt[1]); err != nil {
+				return fmt.Errorf("tap confirm: %w", err)
+			}
 		}
 		r.adb.Sleep(4 * time.Second)
 
@@ -266,7 +278,7 @@ func (r *Runner) tapConfirm(action string) error {
 			return fmt.Errorf("find confirm button: %w", err)
 		}
 		if !still {
-			fmt.Printf("[%s] confirm popup dismissed after label tap\n", action)
+			fmt.Printf("[%s] confirm popup dismissed\n", action)
 			return nil
 		}
 	}

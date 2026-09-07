@@ -56,7 +56,7 @@ const screenOnDelay = 1200 * time.Millisecond
 
 // Wake turns the screen on from sleep/doze (Samsung tablet).
 func (c *Client) Wake() error {
-	_ = c.KeyEvent(26)  // KEYCODE_POWER — bật màn hình
+	_ = c.KeyEvent(26) // KEYCODE_POWER — bật màn hình
 	c.Sleep(400 * time.Millisecond)
 	_ = c.KeyEvent(224) // KEYCODE_WAKEUP
 	c.Sleep(screenOnDelay)
@@ -105,14 +105,31 @@ func (c *Client) Launch(pkg, activity string) error {
 	return err
 }
 
+// Navigation / recents coords for Samsung SM-P619 (1200×2000).
+// Old SM-X406B (1320×2112) values scaled + KEYCODE_APP_SWITCH as primary open.
 const (
-	RecentsButtonX = 960
-	RecentsButtonY = 2076
-	// People HDBank card in recents [712,269][1095,891]
-	RecentsCardSwipeFromX = 903
-	RecentsCardSwipeFromY = 800
-	RecentsCardSwipeToY   = 150
+	RecentsButtonX = 872
+	RecentsButtonY = 1966
+	// Swipe up to dismiss the foreground card in Recents.
+	RecentsCardSwipeFromX = 600
+	RecentsCardSwipeFromY = 1100
+	RecentsCardSwipeToY   = 200
 )
+
+// OpenRecents opens the ||| Recents / overview screen.
+// Prefer KEYCODE_APP_SWITCH (187); fall back to tapping the nav ||| button.
+func (c *Client) OpenRecents() error {
+	if err := c.KeyEvent(187); err != nil { // KEYCODE_APP_SWITCH
+		return err
+	}
+	c.Sleep(800 * time.Millisecond)
+	return nil
+}
+
+// OpenRecentsByNavTap taps the on-screen ||| button (3-button navigation).
+func (c *Client) OpenRecentsByNavTap() error {
+	return c.Tap(RecentsButtonX, RecentsButtonY)
+}
 
 func (c *Client) ForceStop(pkg string) error {
 	_, err := c.deviceCmd("shell", "am", "force-stop", pkg)

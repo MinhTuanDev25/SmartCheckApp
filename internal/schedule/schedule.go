@@ -181,7 +181,7 @@ func runJob(runner Runner, job Job) {
 		err = fmt.Errorf("unknown action %q", job.Action)
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[%s] job aborted (cleanup applied) — waiting for next schedule\n", job.Label)
+		fmt.Fprintf(os.Stderr, "[%s] lần này bỏ qua (đã về Home + xóa đa nhiệm) — đợi job tiếp theo\n", job.Label)
 		return
 	}
 	fmt.Printf("=== [%s] completed ===\n", job.Label)
