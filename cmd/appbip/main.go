@@ -77,11 +77,10 @@ Usage:
   appbip check-out
   appbip schedule
 
-Schedule (mặc định giờ VN, Asia/Ho_Chi_Minh, chỉ thứ 2–thứ 6):
-  07:50  check-in lần 1
-  08:05  check-in lần 2
-  17:00  check-out lần 1
-  18:00  check-out lần 2
+Schedule (giờ VN, Asia/Ho_Chi_Minh, thứ 2–thứ 6):
+  2 lần check-in  random giây 07:50:00 → 08:05:00 (cách nhau ≥ 90s)
+  1 lần check-out random giây 17:00:00 → 17:05:00
+  Mỗi bước trong flow cách nhau 5s
 
 Env:
   APPBIP_ADB     Đường dẫn adb.exe (nếu chưa có trong PATH)
