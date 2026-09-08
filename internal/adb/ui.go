@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 type uiNode struct {
@@ -204,16 +205,53 @@ func findConfirmButtonCenter(dump string) (int, int, bool) {
 }
 
 func isConfirmButtonText(value string) bool {
-	s := strings.ToLower(strings.TrimSpace(value))
-	if s == "" || len(s) > 30 {
+	s := strings.TrimSpace(value)
+	if s == "" || len([]rune(s)) > 40 {
 		return false
 	}
-	return s == "xác nhận" ||
-		s == "xac nhan" ||
-		s == "đồng ý" ||
-		s == "dong y" ||
-		s == "ok" ||
-		strings.Contains(s, "xác nhận")
+	// App dump thường dùng Unicode tổ hợp (XÁC NHẬN) ≠ NFC "XÁC NHẬN".
+	folded := foldVN(s)
+	return folded == "xac nhan" ||
+		folded == "dong y" ||
+		folded == "ok" ||
+		strings.Contains(folded, "xac nhan")
+}
+
+// foldVN lowercases and strips Vietnamese diacritics / combining marks → ASCII letters.
+func foldVN(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if unicode.Is(unicode.Mn, r) {
+			continue
+		}
+		if mapped, ok := vnFold[r]; ok {
+			b.WriteRune(mapped)
+			continue
+		}
+		if r >= 'a' && r <= 'z' || r == ' ' {
+			b.WriteRune(r)
+		}
+	}
+	return strings.Join(strings.Fields(b.String()), " ")
+}
+
+// Common Vietnamese letters (NFC) → base Latin. Combining marks handled via unicode.Mn.
+var vnFold = map[rune]rune{
+	'à': 'a', 'á': 'a', 'ả': 'a', 'ã': 'a', 'ạ': 'a',
+	'ă': 'a', 'ằ': 'a', 'ắ': 'a', 'ẳ': 'a', 'ẵ': 'a', 'ặ': 'a',
+	'â': 'a', 'ầ': 'a', 'ấ': 'a', 'ẩ': 'a', 'ẫ': 'a', 'ậ': 'a',
+	'è': 'e', 'é': 'e', 'ẻ': 'e', 'ẽ': 'e', 'ẹ': 'e',
+	'ê': 'e', 'ề': 'e', 'ế': 'e', 'ể': 'e', 'ễ': 'e', 'ệ': 'e',
+	'ì': 'i', 'í': 'i', 'ỉ': 'i', 'ĩ': 'i', 'ị': 'i',
+	'ò': 'o', 'ó': 'o', 'ỏ': 'o', 'õ': 'o', 'ọ': 'o',
+	'ô': 'o', 'ồ': 'o', 'ố': 'o', 'ổ': 'o', 'ỗ': 'o', 'ộ': 'o',
+	'ơ': 'o', 'ờ': 'o', 'ớ': 'o', 'ở': 'o', 'ỡ': 'o', 'ợ': 'o',
+	'ù': 'u', 'ú': 'u', 'ủ': 'u', 'ũ': 'u', 'ụ': 'u',
+	'ư': 'u', 'ừ': 'u', 'ứ': 'u', 'ử': 'u', 'ữ': 'u', 'ự': 'u',
+	'ỳ': 'y', 'ý': 'y', 'ỷ': 'y', 'ỹ': 'y', 'ỵ': 'y',
+	'đ': 'd',
 }
 
 // WaitForConfirmPopup waits for a confirm button in the lower dialog area.

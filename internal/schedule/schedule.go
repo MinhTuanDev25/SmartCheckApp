@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -29,12 +30,13 @@ func Run(runner Runner) error {
 		return fmt.Errorf("load timezone: %w", err)
 	}
 
-	fmt.Printf("appbip schedule (Mon–Fri, %s) — 2 check-in random 07:50:00–08:05:00, 1 check-out random 17:00:00–17:05:00 — Ctrl+C to stop\n", loc.String())
+	fmt.Printf("appbip schedule (Mon–Fri, %s) — 2 check-in 07:50–08:05, 2 check-out 17:00–17:05 (lần 2 chỉ khi lần 1 fail) — Ctrl+C to stop\n", loc.String())
 
 	var (
-		mu       sync.Mutex
-		planDate time.Time
-		jobs     []Job
+		mu         sync.Mutex
+		planDate   time.Time
+		jobs       []Job
+		succeeded  = map[string]bool{} // "check-in" / "check-out" đã OK trong ngày
 	)
 
 	for {
@@ -42,6 +44,7 @@ func Run(runner Runner) error {
 		today := dateOnly(now)
 		if !planDate.Equal(today) {
 			planDate = today
+			succeeded = map[string]bool{}
 			jobs = planJobs(now)
 			printPlan(now, jobs)
 		}
@@ -56,12 +59,23 @@ func Run(runner Runner) error {
 			continue
 		}
 
+		// Lần 2 (cùng action) bỏ qua nếu lần 1 trong ngày đã thành công.
+		if succeeded[next.Action] {
+			fmt.Printf("skip %s — %s lần trước đã thành công\n", next.Label, next.Action)
+			markConsumed(&jobs, next.Label, now)
+			continue
+		}
+
 		fmt.Printf("next: %s at %s\n", next.Label, next.When.Format("15:04:05"))
 		if err := sleepUntil(next.When); err != nil {
 			return err
 		}
 		mu.Lock()
-		runJob(runner, *next)
+		ok := runJob(runner, *next)
+		if ok {
+			succeeded[next.Action] = true
+		}
+		markConsumed(&jobs, next.Label, time.Now().In(loc))
 		mu.Unlock()
 	}
 }
@@ -74,13 +88,13 @@ func planJobs(now time.Time) []Job {
 	if now.Weekday() == time.Saturday || now.Weekday() == time.Sunday {
 		return nil
 	}
-	// Random xuống từng giây trong khoảng [start, end] inclusive.
 	in := pickTwo(now, 7, 50, 0, 8, 5, 0, 90*time.Second)
-	out := pickOne(now, 17, 0, 0, 17, 5, 0)
+	out := pickTwo(now, 17, 0, 0, 17, 5, 0, 90*time.Second)
 	return []Job{
 		{Label: "check-in lần 1", Action: "check-in", When: in[0]},
 		{Label: "check-in lần 2", Action: "check-in", When: in[1]},
-		{Label: "check-out", Action: "check-out", When: out},
+		{Label: "check-out lần 1", Action: "check-out", When: out[0]},
+		{Label: "check-out lần 2", Action: "check-out", When: out[1]},
 	}
 }
 
@@ -111,18 +125,6 @@ func pickTwo(day time.Time, h1, m1, s1, h2, m2, s2 int, minGap time.Duration) []
 	return []time.Time{start, second}
 }
 
-// pickOne picks one random time (hour:min:sec) in [h1:m1:s1, h2:m2:s2].
-func pickOne(day time.Time, h1, m1, s1, h2, m2, s2 int) time.Time {
-	loc := day.Location()
-	start := time.Date(day.Year(), day.Month(), day.Day(), h1, m1, s1, 0, loc)
-	end := time.Date(day.Year(), day.Month(), day.Day(), h2, m2, s2, 0, loc)
-	span := int(end.Sub(start).Seconds())
-	if span < 0 {
-		span = 0
-	}
-	return start.Add(time.Duration(rand.IntN(span+1)) * time.Second)
-}
-
 func nextJob(now time.Time, jobs []Job) *Job {
 	for i := range jobs {
 		if jobs[i].When.After(now) {
@@ -131,6 +133,16 @@ func nextJob(now time.Time, jobs []Job) *Job {
 		}
 	}
 	return nil
+}
+
+// markConsumed moves a job into the past so nextJob will not pick it again.
+func markConsumed(jobs *[]Job, label string, now time.Time) {
+	for i := range *jobs {
+		if (*jobs)[i].Label == label {
+			(*jobs)[i].When = now.Add(-time.Second)
+			return
+		}
+	}
 }
 
 func printPlan(now time.Time, jobs []Job) {
@@ -168,7 +180,7 @@ func sleepUntil(t time.Time) error {
 	return nil
 }
 
-func runJob(runner Runner, job Job) {
+func runJob(runner Runner, job Job) bool {
 	now := time.Now().Format("2006-01-02 15:04:05")
 	fmt.Printf("\n=== [%s] %s ===\n", now, job.Label)
 	var err error
@@ -182,9 +194,32 @@ func runJob(runner Runner, job Job) {
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[%s] lần này bỏ qua (đã về Home + xóa đa nhiệm) — đợi job tiếp theo\n", job.Label)
-		return
+		logFailure(job, err)
+		return false
 	}
 	fmt.Printf("=== [%s] completed ===\n", job.Label)
+	return true
+}
+
+func logFailure(job Job, err error) {
+	_ = os.MkdirAll("logs", 0o755)
+	path := filepath.Join("logs", time.Now().Format("2006-01-02")+".log")
+	f, openErr := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if openErr != nil {
+		fmt.Fprintf(os.Stderr, "log write failed: %v\n", openErr)
+		return
+	}
+	defer f.Close()
+	line := fmt.Sprintf("%s\t%s\t%s\t%v\n",
+		time.Now().Format("2006-01-02 15:04:05"),
+		job.Label,
+		job.Action,
+		err,
+	)
+	if _, werr := f.WriteString(line); werr != nil {
+		fmt.Fprintf(os.Stderr, "log write failed: %v\n", werr)
+	}
+	fmt.Printf("logged failure → %s\n", path)
 }
 
 func timezone() string {

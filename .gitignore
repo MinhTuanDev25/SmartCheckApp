@@ -2,4 +2,7 @@
 /_ui_*.xml
 /_after_*.png
 /_checkout_*.png
+/debug_*.xml
+/logs/
 /appbip
+/appbip.exe
