@@ -30,7 +30,7 @@ func Run(runner Runner) error {
 		return fmt.Errorf("load timezone: %w", err)
 	}
 
-	fmt.Printf("appbip schedule (Mon–Fri, %s) — 2 check-in 07:50–08:05, 2 check-out 17:00–17:05 (lần 2 chỉ khi lần 1 fail) — Ctrl+C to stop\n", loc.String())
+	fmt.Printf("appbip schedule (Mon–Fri, %s) — 4 check-in 07:50–08:07, 4 check-out 17:00–17:15 (các lần sau bỏ nếu lần trước OK) — Ctrl+C to stop\n", loc.String())
 
 	var (
 		mu         sync.Mutex
@@ -59,7 +59,7 @@ func Run(runner Runner) error {
 			continue
 		}
 
-		// Lần 2 (cùng action) bỏ qua nếu lần 1 trong ngày đã thành công.
+		// Các lần sau (cùng action) bỏ qua nếu đã thành công trong ngày.
 		if succeeded[next.Action] {
 			fmt.Printf("skip %s — %s lần trước đã thành công\n", next.Label, next.Action)
 			markConsumed(&jobs, next.Label, now)
@@ -88,19 +88,32 @@ func planJobs(now time.Time) []Job {
 	if now.Weekday() == time.Saturday || now.Weekday() == time.Sunday {
 		return nil
 	}
-	in := pickTwo(now, 7, 50, 0, 8, 5, 0, 90*time.Second)
-	out := pickTwo(now, 17, 0, 0, 17, 5, 0, 90*time.Second)
-	return []Job{
-		{Label: "check-in lần 1", Action: "check-in", When: in[0]},
-		{Label: "check-in lần 2", Action: "check-in", When: in[1]},
-		{Label: "check-out lần 1", Action: "check-out", When: out[0]},
-		{Label: "check-out lần 2", Action: "check-out", When: out[1]},
+	in := pickN(now, 4, 7, 50, 0, 8, 7, 0, 90*time.Second)
+	out := pickN(now, 4, 17, 0, 0, 17, 15, 0, 90*time.Second)
+	jobs := make([]Job, 0, 8)
+	for i, t := range in {
+		jobs = append(jobs, Job{
+			Label:  fmt.Sprintf("check-in lần %d", i+1),
+			Action: "check-in",
+			When:   t,
+		})
 	}
+	for i, t := range out {
+		jobs = append(jobs, Job{
+			Label:  fmt.Sprintf("check-out lần %d", i+1),
+			Action: "check-out",
+			When:   t,
+		})
+	}
+	return jobs
 }
 
-// pickTwo picks two distinct random times (hour:min:sec) in [h1:m1:s1, h2:m2:s2],
-// ordered ascending, at least minGap apart.
-func pickTwo(day time.Time, h1, m1, s1, h2, m2, s2 int, minGap time.Duration) []time.Time {
+// pickN picks n distinct random times (hour:min:sec) in [h1:m1:s1, h2:m2:s2],
+// ordered ascending, consecutive gaps at least minGap.
+func pickN(day time.Time, n, h1, m1, s1, h2, m2, s2 int, minGap time.Duration) []time.Time {
+	if n <= 0 {
+		return nil
+	}
 	loc := day.Location()
 	start := time.Date(day.Year(), day.Month(), day.Day(), h1, m1, s1, 0, loc)
 	end := time.Date(day.Year(), day.Month(), day.Day(), h2, m2, s2, 0, loc)
@@ -108,21 +121,52 @@ func pickTwo(day time.Time, h1, m1, s1, h2, m2, s2 int, minGap time.Duration) []
 	if span < 0 {
 		span = 0
 	}
-	for try := 0; try < 200; try++ {
-		a := start.Add(time.Duration(rand.IntN(span+1)) * time.Second)
-		b := start.Add(time.Duration(rand.IntN(span+1)) * time.Second)
-		if a.After(b) {
-			a, b = b, a
+	for try := 0; try < 500; try++ {
+		seen := map[int]struct{}{}
+		times := make([]time.Time, 0, n)
+		for len(times) < n {
+			sec := 0
+			if span > 0 {
+				sec = rand.IntN(span + 1)
+			}
+			if _, ok := seen[sec]; ok {
+				continue
+			}
+			seen[sec] = struct{}{}
+			times = append(times, start.Add(time.Duration(sec)*time.Second))
 		}
-		if b.Sub(a) >= minGap {
-			return []time.Time{a, b}
+		sortTimes(times)
+		ok := true
+		for i := 1; i < len(times); i++ {
+			if times[i].Sub(times[i-1]) < minGap {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			return times
 		}
 	}
-	second := start.Add(minGap)
-	if second.After(end) {
-		second = end
+	// Fallback: evenly spaced from start by minGap (clamp to end).
+	out := make([]time.Time, n)
+	for i := 0; i < n; i++ {
+		t := start.Add(time.Duration(i) * minGap)
+		if t.After(end) {
+			t = end
+		}
+		out[i] = t
 	}
-	return []time.Time{start, second}
+	return out
+}
+
+func sortTimes(times []time.Time) {
+	for i := 1; i < len(times); i++ {
+		j := i
+		for j > 0 && times[j].Before(times[j-1]) {
+			times[j], times[j-1] = times[j-1], times[j]
+			j--
+		}
+	}
 }
 
 func nextJob(now time.Time, jobs []Job) *Job {
