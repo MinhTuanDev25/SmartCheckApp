@@ -5,12 +5,17 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"github.com/appbip/appbip/internal/people"
 
 	_ "time/tzdata"
+)
+
+const (
+	// Số lần thử mỗi action trong ngày; lần đầu OK là bỏ hết các lần sau.
+	AttemptsPerAction = 10
+	MinGap            = 90 * time.Second
 )
 
 type Job struct {
@@ -30,13 +35,12 @@ func Run(runner Runner) error {
 		return fmt.Errorf("load timezone: %w", err)
 	}
 
-	fmt.Printf("appbip schedule (Mon–Fri, %s) — 4 check-in 07:50–08:07, 4 check-out 17:00–17:15 (các lần sau bỏ nếu lần trước OK) — Ctrl+C to stop\n", loc.String())
+	fmt.Printf("appbip schedule (Mon–Fri, %s) — %d check-in 07:50–08:07, %d check-out 17:00–17:15 (các lần sau bỏ nếu lần trước OK) — Ctrl+C to stop\n", loc.String(), AttemptsPerAction, AttemptsPerAction)
 
 	var (
-		mu         sync.Mutex
-		planDate   time.Time
-		jobs       []Job
-		succeeded  = map[string]bool{} // "check-in" / "check-out" đã OK trong ngày
+		planDate  time.Time
+		jobs      []Job
+		succeeded = map[string]bool{} // "check-in" / "check-out" đã OK trong ngày
 	)
 
 	for {
@@ -70,13 +74,10 @@ func Run(runner Runner) error {
 		if err := sleepUntil(next.When); err != nil {
 			return err
 		}
-		mu.Lock()
-		ok := runJob(runner, *next)
-		if ok {
+		if runJob(runner, *next) {
 			succeeded[next.Action] = true
 		}
 		markConsumed(&jobs, next.Label, time.Now().In(loc))
-		mu.Unlock()
 	}
 }
 
@@ -88,9 +89,9 @@ func planJobs(now time.Time) []Job {
 	if now.Weekday() == time.Saturday || now.Weekday() == time.Sunday {
 		return nil
 	}
-	in := pickN(now, 4, 7, 50, 0, 8, 7, 0, 90*time.Second)
-	out := pickN(now, 4, 17, 0, 0, 17, 15, 0, 90*time.Second)
-	jobs := make([]Job, 0, 8)
+	in := pickN(now, AttemptsPerAction, 7, 50, 0, 8, 7, 0, MinGap)
+	out := pickN(now, AttemptsPerAction, 17, 0, 0, 17, 15, 0, MinGap)
+	jobs := make([]Job, 0, 2*AttemptsPerAction)
 	for i, t := range in {
 		jobs = append(jobs, Job{
 			Label:  fmt.Sprintf("check-in lần %d", i+1),
@@ -108,8 +109,12 @@ func planJobs(now time.Time) []Job {
 	return jobs
 }
 
-// pickN picks n distinct random times (hour:min:sec) in [h1:m1:s1, h2:m2:s2],
-// ordered ascending, consecutive gaps at least minGap.
+// pickN picks n random times (hour:min:sec) in [h1:m1:s1, h2:m2:s2], ordered
+// ascending, consecutive gaps at least minGap.
+//
+// Random offsets are drawn from the span left over after reserving (n-1)*minGap,
+// then shifted by i*minGap. Rejection sampling would almost never succeed once n
+// gets large relative to the window.
 func pickN(day time.Time, n, h1, m1, s1, h2, m2, s2 int, minGap time.Duration) []time.Time {
 	if n <= 0 {
 		return nil
@@ -121,49 +126,40 @@ func pickN(day time.Time, n, h1, m1, s1, h2, m2, s2 int, minGap time.Duration) [
 	if span < 0 {
 		span = 0
 	}
-	for try := 0; try < 500; try++ {
-		seen := map[int]struct{}{}
-		times := make([]time.Time, 0, n)
-		for len(times) < n {
+
+	gap := int(minGap.Seconds())
+	free := span - (n-1)*gap
+	if free < 0 {
+		// Window too small for the requested gap — spread evenly instead.
+		out := make([]time.Time, n)
+		for i := 0; i < n; i++ {
 			sec := 0
-			if span > 0 {
-				sec = rand.IntN(span + 1)
+			if n > 1 {
+				sec = span * i / (n - 1)
 			}
-			if _, ok := seen[sec]; ok {
-				continue
-			}
-			seen[sec] = struct{}{}
-			times = append(times, start.Add(time.Duration(sec)*time.Second))
+			out[i] = start.Add(time.Duration(sec) * time.Second)
 		}
-		sortTimes(times)
-		ok := true
-		for i := 1; i < len(times); i++ {
-			if times[i].Sub(times[i-1]) < minGap {
-				ok = false
-				break
-			}
-		}
-		if ok {
-			return times
-		}
+		return out
 	}
-	// Fallback: evenly spaced from start by minGap (clamp to end).
+
+	offsets := make([]int, n)
+	for i := range offsets {
+		offsets[i] = rand.IntN(free + 1)
+	}
+	sortInts(offsets)
+
 	out := make([]time.Time, n)
-	for i := 0; i < n; i++ {
-		t := start.Add(time.Duration(i) * minGap)
-		if t.After(end) {
-			t = end
-		}
-		out[i] = t
+	for i, off := range offsets {
+		out[i] = start.Add(time.Duration(off+i*gap) * time.Second)
 	}
 	return out
 }
 
-func sortTimes(times []time.Time) {
-	for i := 1; i < len(times); i++ {
+func sortInts(v []int) {
+	for i := 1; i < len(v); i++ {
 		j := i
-		for j > 0 && times[j].Before(times[j-1]) {
-			times[j], times[j-1] = times[j-1], times[j]
+		for j > 0 && v[j] < v[j-1] {
+			v[j], v[j-1] = v[j-1], v[j]
 			j--
 		}
 	}

@@ -12,10 +12,10 @@ import (
 )
 
 type uiNode struct {
-	Text        string `xml:"text,attr"`
-	ContentDesc string `xml:"content-desc,attr"`
-	Bounds      string `xml:"bounds,attr"`
-	Clickable   string `xml:"clickable,attr"`
+	Text        string   `xml:"text,attr"`
+	ContentDesc string   `xml:"content-desc,attr"`
+	Bounds      string   `xml:"bounds,attr"`
+	Clickable   string   `xml:"clickable,attr"`
 	Nodes       []uiNode `xml:"node"`
 }
 

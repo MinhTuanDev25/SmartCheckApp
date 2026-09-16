@@ -2,11 +2,16 @@ package adb
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
 	"time"
 )
+
+// Mọi lệnh adb đều có hạn — tránh treo cả schedule khi cáp USB rớt giữa lệnh.
+const commandTimeout = 60 * time.Second
 
 type Client struct {
 	binary string
@@ -145,27 +150,32 @@ func (c *Client) deviceCmd(args ...string) (string, error) {
 	if c.device != "" {
 		all = append([]string{"-s", c.device}, args...)
 	}
-	cmd := exec.Command(c.binary, all...)
+	return c.exec(args, all)
+}
+
+func (c *Client) run(args ...string) (string, error) {
+	return c.exec(args, args)
+}
+
+// exec runs adb with a timeout; label is what shows up in error messages.
+func (c *Client) exec(label, args []string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, c.binary, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	err := cmd.Run()
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return "", fmt.Errorf("adb %s: timeout sau %s", strings.Join(label, " "), commandTimeout)
+	}
+	if err != nil {
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
 			msg = strings.TrimSpace(stdout.String())
 		}
-		return "", fmt.Errorf("adb %s: %w: %s", strings.Join(args, " "), err, msg)
-	}
-	return strings.TrimSpace(stdout.String()), nil
-}
-
-func (c *Client) run(args ...string) (string, error) {
-	cmd := exec.Command(c.binary, args...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("adb %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+		return "", fmt.Errorf("adb %s: %w: %s", strings.Join(label, " "), err, msg)
 	}
 	return strings.TrimSpace(stdout.String()), nil
 }

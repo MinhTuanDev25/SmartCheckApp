@@ -16,7 +16,7 @@ const (
 	// Samsung SM-P619 (Galaxy Tab S6 Lite 2022)
 	ScreenWidth  = 1200
 	ScreenHeight = 2000
-	StepDelay    = 5 * time.Second
+	StepDelay    = 3 * time.Second
 
 	EnableAttendanceAction = true
 	EnableConfirmAction    = true
