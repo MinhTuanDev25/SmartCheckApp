@@ -35,7 +35,7 @@ func Run(runner Runner) error {
 		return fmt.Errorf("load timezone: %w", err)
 	}
 
-	fmt.Printf("appbip schedule (Mon–Thu, %s) — %d check-in 07:50–08:07, %d check-out 17:00–17:15 (các lần sau bỏ nếu lần trước OK) — Ctrl+C to stop\n", loc.String(), AttemptsPerAction, AttemptsPerAction)
+	fmt.Printf("appbip schedule (Mon–Fri, %s) — %d check-in 07:50–08:07, %d check-out 17:00–17:15 (các lần sau bỏ nếu lần trước OK) — Ctrl+C to stop\n", loc.String(), AttemptsPerAction, AttemptsPerAction)
 
 	var (
 		planDate  time.Time
@@ -86,7 +86,7 @@ func dateOnly(t time.Time) time.Time {
 }
 
 func planJobs(now time.Time) []Job {
-	// Chỉ T2–T5; không chấm T6 / T7 / CN.
+	// Chỉ T2–T6; không chấm T7 / CN.
 	if !isWorkday(now.Weekday()) {
 		return nil
 	}
@@ -187,12 +187,12 @@ func markConsumed(jobs *[]Job, label string, now time.Time) {
 }
 
 func isWorkday(d time.Weekday) bool {
-	return d >= time.Monday && d <= time.Thursday
+	return d >= time.Monday && d <= time.Friday
 }
 
 func printPlan(now time.Time, jobs []Job) {
 	if len(jobs) == 0 {
-		fmt.Printf("=== %s (%s) off day — no jobs ===\n", now.Format("2006-01-02"), now.Weekday())
+		fmt.Printf("=== %s (%s) weekend — no jobs ===\n", now.Format("2006-01-02"), now.Weekday())
 		return
 	}
 	fmt.Printf("=== %s (%s) ===\n", now.Format("2006-01-02"), now.Weekday())
