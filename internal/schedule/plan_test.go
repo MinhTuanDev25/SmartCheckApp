@@ -55,38 +55,49 @@ func assertWindow(t *testing.T, times []time.Time, day time.Time, loc *time.Loca
 	}
 }
 
-func TestPlanJobs_WeekendEmpty(t *testing.T) {
+func TestPlanJobs_OffDaysEmpty(t *testing.T) {
 	loc, _ := time.LoadLocation("Asia/Ho_Chi_Minh")
-	// Sat 2026-09-19, Sun 20 — no jobs. Friday still has jobs.
+	// Tue 2026-09-15, Sat 19, Sun 20 — no jobs.
 	for _, day := range []time.Time{
-		time.Date(2026, 9, 19, 8, 0, 0, 0, loc),
-		time.Date(2026, 9, 20, 8, 0, 0, 0, loc),
+		time.Date(2026, 9, 15, 8, 0, 0, 0, loc), // Tuesday
+		time.Date(2026, 9, 19, 8, 0, 0, 0, loc), // Saturday
+		time.Date(2026, 9, 20, 8, 0, 0, 0, loc), // Sunday
 	} {
 		if jobs := planJobs(day); len(jobs) != 0 {
 			t.Fatalf("%s (%s) should have no jobs, got %d", day.Format("2006-01-02"), day.Weekday(), len(jobs))
 		}
 	}
-	fri := time.Date(2026, 9, 18, 8, 0, 0, 0, loc)
-	if jobs := planJobs(fri); len(jobs) != 2*AttemptsPerAction {
-		t.Fatalf("Friday should have jobs, got %d", len(jobs))
+}
+
+func TestPlanJobs_WorkdaysHaveJobs(t *testing.T) {
+	loc, _ := time.LoadLocation("Asia/Ho_Chi_Minh")
+	for _, day := range []time.Time{
+		time.Date(2026, 9, 14, 8, 0, 0, 0, loc), // Monday
+		time.Date(2026, 9, 16, 8, 0, 0, 0, loc), // Wednesday
+		time.Date(2026, 9, 17, 8, 0, 0, 0, loc), // Thursday
+		time.Date(2026, 9, 18, 8, 0, 0, 0, loc), // Friday
+	} {
+		if jobs := planJobs(day); len(jobs) != 2*AttemptsPerAction {
+			t.Fatalf("%s (%s) should have %d jobs, got %d", day.Format("2006-01-02"), day.Weekday(), 2*AttemptsPerAction, len(jobs))
+		}
 	}
 }
 
-func TestNextWeekday_SkipsSatSun(t *testing.T) {
+func TestNextWeekday_SkipsTueSatSun(t *testing.T) {
 	loc, _ := time.LoadLocation("Asia/Ho_Chi_Minh")
-	// Friday evening → next workday Monday 00:00.
-	fri := time.Date(2026, 9, 18, 18, 0, 0, 0, loc)
-	got := nextWeekday(fri)
-	want := time.Date(2026, 9, 21, 0, 0, 0, 0, loc) // Monday
-	if !got.Equal(want) {
-		t.Fatalf("nextWeekday(Fri) = %s, want %s", got, want)
+	// Monday evening → Wednesday (skip Tuesday).
+	mon := time.Date(2026, 9, 14, 18, 0, 0, 0, loc)
+	got := nextWeekday(mon)
+	wantWed := time.Date(2026, 9, 16, 0, 0, 0, 0, loc)
+	if !got.Equal(wantWed) {
+		t.Fatalf("nextWeekday(Mon) = %s, want %s", got, wantWed)
 	}
-	// Thursday → Friday.
-	thu := time.Date(2026, 9, 17, 18, 0, 0, 0, loc)
-	got = nextWeekday(thu)
-	wantFri := time.Date(2026, 9, 18, 0, 0, 0, 0, loc)
-	if !got.Equal(wantFri) {
-		t.Fatalf("nextWeekday(Thu) = %s, want %s", got, wantFri)
+	// Friday evening → Monday.
+	fri := time.Date(2026, 9, 18, 18, 0, 0, 0, loc)
+	got = nextWeekday(fri)
+	wantMon := time.Date(2026, 9, 21, 0, 0, 0, 0, loc)
+	if !got.Equal(wantMon) {
+		t.Fatalf("nextWeekday(Fri) = %s, want %s", got, wantMon)
 	}
 }
 
