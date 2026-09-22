@@ -20,6 +20,9 @@ const (
 
 	EnableAttendanceAction = true
 	EnableConfirmAction    = true
+
+	// Đợi UI load sau PIN / sau mở màn wifi trước khi báo miss.
+	UIWaitTimeout = 15 * time.Second
 )
 
 const AppLabel = "People HDBank"
@@ -116,44 +119,37 @@ func (r *Runner) run(action string) (err error) {
 	if err := r.adb.Text(pin); err != nil {
 		return err
 	}
-	r.wait()
 
-	fmt.Printf("[%s] opening Chấm công Wifi...\n", action)
-	x, y, err = r.adb.TapByLabelContains(WifiMenuLabel)
+	fmt.Printf("[%s] waiting for Chấm công Wifi (up to %s)...\n", action, UIWaitTimeout)
+	wifiNeedles := []string{
+		WifiMenuLabel,
+		WifiScreenTitle,
+		"Chấm công WiFi",
+		"Cham cong Wifi",
+		"cham cong wifi",
+	}
+	x, y, matched, err := r.adb.WaitAndTapAnyContains(UIWaitTimeout, wifiNeedles...)
 	if err != nil {
+		r.saveMiss(action, "wifi_menu")
 		return fmt.Errorf("open wifi menu: %w", err)
 	}
-	fmt.Printf("[%s] tapped %s at (%d, %d)\n", action, WifiMenuLabel, x, y)
-	r.wait()
+	fmt.Printf("[%s] tapped wifi menu (%q) at (%d, %d)\n", action, matched, x, y)
 
+	checkNeedles := []string{"CHECK-IN", "check-in", "Check-In", "checkin"}
 	checkLabel := "CHECK-IN"
-	checkSubstr := "check-in"
 	if action == "check-out" {
+		checkNeedles = []string{"CHECK-OUT", "check-out", "Check-Out", "checkout"}
 		checkLabel = "CHECK-OUT"
-		checkSubstr = "check-out"
 	}
 
-	// Bắt buộc thấy nút CHECK-IN/OUT — không chỉ thấy tiêu đề wifi rồi chạy tiếp.
-	hasBtn, err := r.adb.HasAnyLabelContains(checkSubstr, strings.ToLower(checkLabel))
-	if err != nil {
-		return fmt.Errorf("verify wifi screen: %w", err)
-	}
-	if !hasBtn {
-		return fmt.Errorf("%s button not on wifi screen — abort so next schedule can retry", checkLabel)
-	}
-	fmt.Printf("[%s] on wifi attendance screen (found %s)\n", action, checkLabel)
-
+	fmt.Printf("[%s] waiting for %s (up to %s)...\n", action, checkLabel, UIWaitTimeout)
 	if EnableAttendanceAction {
-		fmt.Printf("[%s] tapping %s...\n", action, checkLabel)
-		x, y, err := r.adb.TapByLabel(checkLabel)
+		x, y, matched, err = r.adb.WaitAndTapAnyContains(UIWaitTimeout, checkNeedles...)
 		if err != nil {
-			x, y, err = r.adb.TapByLabelContains(checkSubstr)
+			r.saveMiss(action, strings.ToLower(checkLabel))
+			return fmt.Errorf("%s button not on wifi screen — abort so next schedule can retry: %w", checkLabel, err)
 		}
-		if err != nil {
-			return fmt.Errorf("tap %s failed (no fallback coords): %w", checkLabel, err)
-		}
-		fmt.Printf("[%s] tapped %s at (%d, %d)\n", action, checkLabel, x, y)
-		r.wait()
+		fmt.Printf("[%s] tapped %s (%q) at (%d, %d)\n", action, checkLabel, matched, x, y)
 
 		if EnableConfirmAction {
 			if err := r.tapConfirm(action); err != nil {
@@ -164,7 +160,12 @@ func (r *Runner) run(action string) (err error) {
 			fmt.Printf("[%s] skip confirm (disabled)\n", action)
 		}
 	} else {
-		fmt.Printf("[%s] skip %s (disabled)\n", action, action)
+		// Dry-run: chỉ cần thấy nút, không tap.
+		if err := r.adb.WaitForAnyLabelContains(UIWaitTimeout, checkNeedles...); err != nil {
+			r.saveMiss(action, strings.ToLower(checkLabel))
+			return fmt.Errorf("%s button not on wifi screen — abort so next schedule can retry: %w", checkLabel, err)
+		}
+		fmt.Printf("[%s] on wifi attendance screen (found %s) — skip tap (disabled)\n", action, checkLabel)
 	}
 
 	fmt.Printf("[%s] force stopping app...\n", action)
@@ -244,12 +245,7 @@ func (r *Runner) tapConfirm(action string) error {
 	r.adb.Sleep(3 * time.Second)
 
 	if err := r.adb.WaitForConfirmPopup(15 * time.Second); err != nil {
-		if dump, dumpErr := r.adb.DumpUI(3); dumpErr == nil {
-			_ = os.MkdirAll("logs", 0o755)
-			path := fmt.Sprintf("logs/confirm_miss_%s.xml", time.Now().Format("150405"))
-			_ = os.WriteFile(path, []byte(dump), 0o644)
-			fmt.Printf("[%s] saved miss dump → %s\n", action, path)
-		}
+		r.saveMiss(action, "confirm")
 		return fmt.Errorf("confirm popup not shown after attendance tap — abort: %w", err)
 	}
 
@@ -271,4 +267,34 @@ func (r *Runner) tapConfirm(action string) error {
 	}
 	fmt.Printf("[%s] confirm popup shown — treated as success\n", action)
 	return nil
+}
+
+// saveMiss writes UI XML + PNG screenshot under logs/ for later debugging.
+func (r *Runner) saveMiss(action, step string) {
+	_ = os.MkdirAll("logs", 0o755)
+	stamp := time.Now().Format("150405")
+	safeAction := strings.ReplaceAll(action, " ", "_")
+	base := fmt.Sprintf("logs/miss_%s_%s_%s", step, safeAction, stamp)
+
+	if dump, err := r.adb.DumpUI(3); err == nil {
+		path := base + ".xml"
+		if werr := os.WriteFile(path, []byte(dump), 0o644); werr == nil {
+			fmt.Printf("[%s] saved miss UI → %s\n", action, path)
+		} else {
+			fmt.Printf("[%s] save miss UI failed: %v\n", action, werr)
+		}
+	} else {
+		fmt.Printf("[%s] miss UI dump failed: %v\n", action, err)
+	}
+
+	if png, err := r.adb.ScreenshotPNG(); err == nil {
+		path := base + ".png"
+		if werr := os.WriteFile(path, png, 0o644); werr == nil {
+			fmt.Printf("[%s] saved miss screenshot → %s\n", action, path)
+		} else {
+			fmt.Printf("[%s] save miss screenshot failed: %v\n", action, werr)
+		}
+	} else {
+		fmt.Printf("[%s] miss screenshot failed: %v\n", action, err)
+	}
 }

@@ -89,6 +89,36 @@ func (c *Client) HasAnyLabelContains(substrs ...string) (bool, error) {
 	return false, nil
 }
 
+// WaitAndTapAnyContains polls until any substr matches (foldVN), then taps it.
+// Returns tap coords and which needle matched.
+func (c *Client) WaitAndTapAnyContains(timeout time.Duration, substrs ...string) (int, int, string, error) {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		dump, err := c.DumpUI(3)
+		if err != nil {
+			lastErr = err
+			c.Sleep(2 * time.Second)
+			continue
+		}
+		for _, substr := range substrs {
+			x, y, ok := findLabelContainsCenterPreferClickable(dump, substr)
+			if !ok {
+				continue
+			}
+			if err := c.Tap(x, y); err != nil {
+				return 0, 0, "", err
+			}
+			return x, y, substr, nil
+		}
+		c.Sleep(2 * time.Second)
+	}
+	if lastErr != nil {
+		return 0, 0, "", fmt.Errorf("timeout waiting for labels containing %v: %w", substrs, lastErr)
+	}
+	return 0, 0, "", fmt.Errorf("timeout waiting for labels containing %v", substrs)
+}
+
 // WaitForAnyLabelContains polls until any substring appears or timeout.
 func (c *Client) WaitForAnyLabelContains(timeout time.Duration, substrs ...string) error {
 	deadline := time.Now().Add(timeout)
@@ -359,7 +389,7 @@ func findLabelContainsCenter(dump, substr string) (int, int, bool) {
 }
 
 func labelContains(value, target string) bool {
-	return strings.Contains(strings.ToLower(strings.TrimSpace(value)), target)
+	return strings.Contains(foldVN(value), foldVN(target))
 }
 
 type uiMatch struct {
@@ -385,7 +415,7 @@ func findLabelCenterPreferClickable(dump, label string) (int, int, bool) {
 		}
 		text, desc, bounds, clickable := readNodeAttrs(se)
 		val := displayValue(text, desc)
-		if !strings.EqualFold(val, label) {
+		if foldVN(val) != foldVN(label) {
 			continue
 		}
 		x, y, ok := boundsCenter(bounds)
@@ -395,14 +425,14 @@ func findLabelCenterPreferClickable(dump, label string) (int, int, bool) {
 		matches = append(matches, uiMatch{
 			x: x, y: y, area: boundsArea(bounds),
 			clickable: clickable == "true",
-			exact:     strings.EqualFold(val, label),
+			exact:     foldVN(val) == foldVN(label),
 		})
 	}
 	return pickBestMatch(matches)
 }
 
 func findLabelContainsCenterPreferClickable(dump, substr string) (int, int, bool) {
-	target := strings.ToLower(strings.TrimSpace(substr))
+	target := foldVN(substr)
 	var matches []uiMatch
 	decoder := xml.NewDecoder(strings.NewReader(dump))
 	for {
@@ -429,7 +459,7 @@ func findLabelContainsCenterPreferClickable(dump, substr string) (int, int, bool
 		matches = append(matches, uiMatch{
 			x: x, y: y, area: boundsArea(bounds),
 			clickable: clickable == "true",
-			exact:     strings.EqualFold(val, substr) || strings.EqualFold(val, strings.ToUpper(substr)),
+			exact:     foldVN(val) == target,
 		})
 	}
 	return pickBestMatch(matches)

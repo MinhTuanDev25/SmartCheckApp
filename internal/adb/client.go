@@ -145,6 +145,23 @@ func (c *Client) Sleep(d time.Duration) {
 	time.Sleep(d)
 }
 
+// ScreenshotPNG captures the current screen as PNG bytes (adb exec-out screencap -p).
+func (c *Client) ScreenshotPNG() ([]byte, error) {
+	args := []string{"exec-out", "screencap", "-p"}
+	all := args
+	if c.device != "" {
+		all = append([]string{"-s", c.device}, args...)
+	}
+	data, err := c.execBytes(args, all)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) < 8 || data[0] != 0x89 || data[1] != 'P' || data[2] != 'N' || data[3] != 'G' {
+		return nil, fmt.Errorf("adb screencap: response is not a PNG (%d bytes)", len(data))
+	}
+	return data, nil
+}
+
 func (c *Client) deviceCmd(args ...string) (string, error) {
 	all := args
 	if c.device != "" {
@@ -159,6 +176,15 @@ func (c *Client) run(args ...string) (string, error) {
 
 // exec runs adb with a timeout; label is what shows up in error messages.
 func (c *Client) exec(label, args []string) (string, error) {
+	data, err := c.execBytes(label, args)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
+// execBytes runs adb and returns raw stdout (needed for PNG screencap).
+func (c *Client) execBytes(label, args []string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
 	defer cancel()
 
@@ -168,16 +194,16 @@ func (c *Client) exec(label, args []string) (string, error) {
 	cmd.Stderr = &stderr
 	err := cmd.Run()
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return "", fmt.Errorf("adb %s: timeout sau %s", strings.Join(label, " "), commandTimeout)
+		return nil, fmt.Errorf("adb %s: timeout sau %s", strings.Join(label, " "), commandTimeout)
 	}
 	if err != nil {
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
 			msg = strings.TrimSpace(stdout.String())
 		}
-		return "", fmt.Errorf("adb %s: %w: %s", strings.Join(label, " "), err, msg)
+		return nil, fmt.Errorf("adb %s: %w: %s", strings.Join(label, " "), err, msg)
 	}
-	return strings.TrimSpace(stdout.String()), nil
+	return stdout.Bytes(), nil
 }
 
 func itoa(v int) string {

@@ -2,6 +2,27 @@ package adb
 
 import "testing"
 
+func TestLabelContains_FoldWifi(t *testing.T) {
+	// Decomposed-ish / accented forms should still match the menu needle.
+	cases := []struct {
+		value, target string
+	}{
+		{"Chấm công Wifi", "Chấm công Wifi"},
+		{"Chấm công WIFI", "cham cong wifi"},
+		{"CHẤM CÔNG WIFI", "Cham cong Wifi"},
+		{"Xác nhận chấm công Wifi", "cham cong wifi"},
+	}
+	for _, tc := range cases {
+		if !labelContains(tc.value, tc.target) {
+			t.Fatalf("labelContains(%q, %q) = false (fold value=%q target=%q)",
+				tc.value, tc.target, foldVN(tc.value), foldVN(tc.target))
+		}
+	}
+	if labelContains("People HDBank", "cham cong wifi") {
+		t.Fatal("should not match unrelated label")
+	}
+}
+
 func TestIsConfirmButtonText_DecomposedUnicode(t *testing.T) {
 	// Exact string from SM-P619 People HDBank dump after CHECK-OUT.
 	decomposed := "XA" + "\u0301" + "C NH\u00C2\u0323N" // XÁC NHẬN
