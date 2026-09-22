@@ -77,7 +77,7 @@ Usage:
   appbip check-out
   appbip schedule
 
-Schedule (giờ VN, Asia/Ho_Chi_Minh, T2/T4/T5/T6; không chấm T3/T7/CN):
+Schedule (giờ VN, Asia/Ho_Chi_Minh, thứ 2–thứ 6; không chấm T7/CN):
   15 lần check-in  random giây 07:45:00 → 08:08:00 (cách nhau ≥ 90s; lần sau bỏ nếu đã OK)
   15 lần check-out random giây 17:00:00 → 17:30:00 (cách nhau ≥ 90s; lần sau bỏ nếu đã OK)
   Mỗi bước trong flow cách nhau 3s

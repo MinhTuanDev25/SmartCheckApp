@@ -55,11 +55,10 @@ func assertWindow(t *testing.T, times []time.Time, day time.Time, loc *time.Loca
 	}
 }
 
-func TestPlanJobs_OffDaysEmpty(t *testing.T) {
+func TestPlanJobs_WeekendEmpty(t *testing.T) {
 	loc, _ := time.LoadLocation("Asia/Ho_Chi_Minh")
-	// Tue 2026-09-15, Sat 19, Sun 20 — no jobs.
+	// Sat / Sun — no jobs. Tuesday still has jobs.
 	for _, day := range []time.Time{
-		time.Date(2026, 9, 15, 8, 0, 0, 0, loc), // Tuesday
 		time.Date(2026, 9, 19, 8, 0, 0, 0, loc), // Saturday
 		time.Date(2026, 9, 20, 8, 0, 0, 0, loc), // Sunday
 	} {
@@ -73,6 +72,7 @@ func TestPlanJobs_WorkdaysHaveJobs(t *testing.T) {
 	loc, _ := time.LoadLocation("Asia/Ho_Chi_Minh")
 	for _, day := range []time.Time{
 		time.Date(2026, 9, 14, 8, 0, 0, 0, loc), // Monday
+		time.Date(2026, 9, 15, 8, 0, 0, 0, loc), // Tuesday
 		time.Date(2026, 9, 16, 8, 0, 0, 0, loc), // Wednesday
 		time.Date(2026, 9, 17, 8, 0, 0, 0, loc), // Thursday
 		time.Date(2026, 9, 18, 8, 0, 0, 0, loc), // Friday
@@ -83,14 +83,14 @@ func TestPlanJobs_WorkdaysHaveJobs(t *testing.T) {
 	}
 }
 
-func TestNextWeekday_SkipsTueSatSun(t *testing.T) {
+func TestNextWeekday_SkipsSatSun(t *testing.T) {
 	loc, _ := time.LoadLocation("Asia/Ho_Chi_Minh")
-	// Monday evening → Wednesday (skip Tuesday).
+	// Monday evening → Tuesday.
 	mon := time.Date(2026, 9, 14, 18, 0, 0, 0, loc)
 	got := nextWeekday(mon)
-	wantWed := time.Date(2026, 9, 16, 0, 0, 0, 0, loc)
-	if !got.Equal(wantWed) {
-		t.Fatalf("nextWeekday(Mon) = %s, want %s", got, wantWed)
+	wantTue := time.Date(2026, 9, 15, 0, 0, 0, 0, loc)
+	if !got.Equal(wantTue) {
+		t.Fatalf("nextWeekday(Mon) = %s, want %s", got, wantTue)
 	}
 	// Friday evening → Monday.
 	fri := time.Date(2026, 9, 18, 18, 0, 0, 0, loc)
