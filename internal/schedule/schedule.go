@@ -14,7 +14,7 @@ import (
 
 const (
 	// Số lần thử mỗi action trong ngày; lần đầu OK là bỏ hết các lần sau.
-	AttemptsPerAction = 10
+	AttemptsPerAction = 15
 	MinGap            = 90 * time.Second
 )
 
@@ -35,7 +35,7 @@ func Run(runner Runner) error {
 		return fmt.Errorf("load timezone: %w", err)
 	}
 
-	fmt.Printf("appbip schedule (Mon/Wed/Thu/Fri, %s) — %d check-in 07:50–08:07, %d check-out 17:00–17:15 (các lần sau bỏ nếu lần trước OK) — Ctrl+C to stop\n", loc.String(), AttemptsPerAction, AttemptsPerAction)
+	fmt.Printf("appbip schedule (Mon/Wed/Thu/Fri, %s) — %d check-in 07:45–08:08, %d check-out 17:00–17:30 (các lần sau bỏ nếu lần trước OK) — Ctrl+C to stop\n", loc.String(), AttemptsPerAction, AttemptsPerAction)
 
 	var (
 		planDate  time.Time
@@ -90,8 +90,8 @@ func planJobs(now time.Time) []Job {
 	if !isWorkday(now.Weekday()) {
 		return nil
 	}
-	in := pickN(now, AttemptsPerAction, 7, 50, 0, 8, 7, 0, MinGap)
-	out := pickN(now, AttemptsPerAction, 17, 0, 0, 17, 15, 0, MinGap)
+	in := pickN(now, AttemptsPerAction, 7, 45, 0, 8, 8, 0, MinGap)
+	out := pickN(now, AttemptsPerAction, 17, 0, 0, 17, 30, 0, MinGap)
 	jobs := make([]Job, 0, 2*AttemptsPerAction)
 	for i, t := range in {
 		jobs = append(jobs, Job{

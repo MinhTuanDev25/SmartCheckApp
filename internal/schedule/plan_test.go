@@ -32,8 +32,8 @@ func TestPlanJobs_AttemptsAndWindows(t *testing.T) {
 			}
 		}
 
-		assertWindow(t, in, day, loc, 7, 50, 0, 8, 7, 0)
-		assertWindow(t, out, day, loc, 17, 0, 0, 17, 15, 0)
+		assertWindow(t, in, day, loc, 7, 45, 0, 8, 8, 0)
+		assertWindow(t, out, day, loc, 17, 0, 0, 17, 30, 0)
 	}
 }
 
@@ -105,7 +105,7 @@ func TestPlanJobs_LabelsNumbered(t *testing.T) {
 	loc, _ := time.LoadLocation("Asia/Ho_Chi_Minh")
 	jobs := planJobs(time.Date(2026, 9, 16, 6, 0, 0, 0, loc))
 	last := jobs[AttemptsPerAction-1].Label
-	if !strings.HasSuffix(last, "lần 10") {
-		t.Fatalf("last check-in label = %q, want suffix \"lần 10\"", last)
+	if !strings.HasSuffix(last, "lần 15") {
+		t.Fatalf("last check-in label = %q, want suffix \"lần 15\"", last)
 	}
 }
