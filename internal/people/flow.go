@@ -34,10 +34,13 @@ const (
 	ConfirmLabel    = "XÁC NHẬN"
 )
 
-// Fallback tọa độ (Samsung SM-P619 1200×2000; scaled from SM-X406B dump).
+// Fallback tọa độ SM-P619 1200×2000. Chỉ dùng khi đã thử hết label.
+// CHECK-OUT (876,686) là tâm nút lúc tap đúng bằng chữ; CHECK-IN đối xứng.
+// Wifi là tâm ô bấm [51,750][419,1018] trên màn home.
 var (
-	CheckInButton  = [2]int{324, 715}
-	CheckOutButton = [2]int{876, 715}
+	WifiMenuButton = [2]int{235, 884}
+	CheckInButton  = [2]int{324, 686}
+	CheckOutButton = [2]int{876, 686}
 	// Center of popup button bounds [886,1019][1037,1100] from live dump.
 	ConfirmButton = [2]int{961, 1059}
 )
@@ -130,24 +133,36 @@ func (r *Runner) run(action string) (err error) {
 	}
 	x, y, matched, err := r.adb.WaitAndTapAnyContains(UIWaitTimeout, wifiNeedles...)
 	if err != nil {
-		r.saveMiss(action, "wifi_menu")
-		return fmt.Errorf("open wifi menu: %w", err)
+		fmt.Printf("[%s] wifi label not found — tap fallback (%d, %d)\n", action, WifiMenuButton[0], WifiMenuButton[1])
+		if err := r.adb.Tap(WifiMenuButton[0], WifiMenuButton[1]); err != nil {
+			r.saveMiss(action, "wifi_menu")
+			return fmt.Errorf("open wifi menu: %w", err)
+		}
+		x, y = WifiMenuButton[0], WifiMenuButton[1]
+		matched = "coords"
 	}
 	fmt.Printf("[%s] tapped wifi menu (%q) at (%d, %d)\n", action, matched, x, y)
 
 	checkNeedles := []string{"CHECK-IN", "check-in", "Check-In", "checkin"}
 	checkLabel := "CHECK-IN"
+	checkPoint := CheckInButton
 	if action == "check-out" {
 		checkNeedles = []string{"CHECK-OUT", "check-out", "Check-Out", "checkout"}
 		checkLabel = "CHECK-OUT"
+		checkPoint = CheckOutButton
 	}
 
 	fmt.Printf("[%s] waiting for %s (up to %s)...\n", action, checkLabel, UIWaitTimeout)
 	if EnableAttendanceAction {
 		x, y, matched, err = r.adb.WaitAndTapAnyContains(UIWaitTimeout, checkNeedles...)
 		if err != nil {
-			r.saveMiss(action, strings.ToLower(checkLabel))
-			return fmt.Errorf("%s button not on wifi screen — abort so next schedule can retry: %w", checkLabel, err)
+			fmt.Printf("[%s] %s label not found — tap fallback (%d, %d)\n", action, checkLabel, checkPoint[0], checkPoint[1])
+			if err := r.adb.Tap(checkPoint[0], checkPoint[1]); err != nil {
+				r.saveMiss(action, strings.ToLower(checkLabel))
+				return fmt.Errorf("tap %s coords: %w", checkLabel, err)
+			}
+			x, y = checkPoint[0], checkPoint[1]
+			matched = "coords"
 		}
 		fmt.Printf("[%s] tapped %s (%q) at (%d, %d)\n", action, checkLabel, matched, x, y)
 

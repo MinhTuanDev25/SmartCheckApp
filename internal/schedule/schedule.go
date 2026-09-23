@@ -2,7 +2,6 @@ package schedule
 
 import (
 	"fmt"
-	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"time"
@@ -12,16 +11,25 @@ import (
 	_ "time/tzdata"
 )
 
-const (
-	// Số lần thử mỗi action trong ngày; lần đầu OK là bỏ hết các lần sau.
-	AttemptsPerAction = 15
-	MinGap            = 90 * time.Second
-)
+const retryDelay = 10 * time.Second
 
-type Job struct {
-	Label  string
+// actionWindow là khung retry liên tục. Hết giờ hoặc đã thành công thì dừng.
+type actionWindow struct {
 	Action string
-	When   time.Time
+	Label  string
+	StartH int
+	StartM int
+	StartS int
+	EndH   int
+	EndM   int
+	EndS   int
+}
+
+func dayWindows() []actionWindow {
+	return []actionWindow{
+		{Action: "check-in", Label: "check-in", StartH: 7, StartM: 40, StartS: 0, EndH: 8, EndM: 25, EndS: 0},
+		{Action: "check-out", Label: "check-out", StartH: 17, StartM: 0, StartS: 0, EndH: 17, EndM: 40, EndS: 0},
+	}
 }
 
 type Runner interface {
@@ -35,12 +43,12 @@ func Run(runner Runner) error {
 		return fmt.Errorf("load timezone: %w", err)
 	}
 
-	fmt.Printf("appbip schedule (Mon–Fri, %s) — %d check-in 07:45–08:08, %d check-out 17:00–17:30 (các lần sau bỏ nếu lần trước OK) — Ctrl+C to stop\n", loc.String(), AttemptsPerAction, AttemptsPerAction)
+	fmt.Printf("appbip schedule (Mon–Fri, %s) — check-in 07:40–08:25, check-out 17:00–17:40, retry mỗi %s đến khi OK hoặc hết giờ — Ctrl+C to stop\n", loc.String(), retryDelay)
 
 	var (
 		planDate  time.Time
-		jobs      []Job
-		succeeded = map[string]bool{} // "check-in" / "check-out" đã OK trong ngày
+		succeeded = map[string]bool{}
+		attempt   = map[string]int{}
 	)
 
 	for {
@@ -49,35 +57,59 @@ func Run(runner Runner) error {
 		if !planDate.Equal(today) {
 			planDate = today
 			succeeded = map[string]bool{}
-			jobs = planJobs(now)
-			printPlan(now, jobs)
+			attempt = map[string]int{}
+			printPlan(now)
 		}
 
-		next := nextJob(now, jobs)
-		if next == nil {
+		if !isWorkday(now.Weekday()) {
 			wake := nextWeekday(now)
-			fmt.Printf("no remaining jobs today — sleeping until %s\n", wake.Format("2006-01-02 15:04:05"))
+			fmt.Printf("off day — sleeping until %s\n", wake.Format("2006-01-02 15:04:05"))
 			if err := sleepUntil(wake); err != nil {
 				return err
 			}
 			continue
 		}
 
-		// Các lần sau (cùng action) bỏ qua nếu đã thành công trong ngày.
-		if succeeded[next.Action] {
-			fmt.Printf("skip %s — %s lần trước đã thành công\n", next.Label, next.Action)
-			markConsumed(&jobs, next.Label, now)
+		win := activeWindow(now, succeeded)
+		if win == nil {
+			wake := nextWeekday(now)
+			fmt.Printf("no remaining windows today — sleeping until %s\n", wake.Format("2006-01-02 15:04:05"))
+			if err := sleepUntil(wake); err != nil {
+				return err
+			}
 			continue
 		}
 
-		fmt.Printf("next: %s at %s\n", next.Label, next.When.Format("15:04:05"))
-		if err := sleepUntil(next.When); err != nil {
+		start, end := windowBounds(now, *win)
+		if now.Before(start) {
+			fmt.Printf("next: %s at %s (retry đến %s)\n", win.Label, start.Format("15:04:05"), end.Format("15:04:05"))
+			if err := sleepUntil(start); err != nil {
+				return err
+			}
+			continue
+		}
+
+		attempt[win.Action]++
+		n := attempt[win.Action]
+		label := fmt.Sprintf("%s lần %d", win.Label, n)
+		if runAttempt(runner, label, win.Action) {
+			succeeded[win.Action] = true
+			fmt.Printf("%s thành công — không retry nữa\n", win.Label)
+			continue
+		}
+
+		now = time.Now().In(loc)
+		_, end = windowBounds(now, *win)
+		next := now.Add(retryDelay)
+		if !next.Before(end) {
+			fmt.Printf("%s hết khung %s — dừng retry\n", win.Label, end.Format("15:04:05"))
+			succeeded[win.Action] = true // đóng cửa sổ, không thử thêm trong ngày
+			continue
+		}
+		fmt.Printf("%s fail — cleanup xong, retry sau %s\n", label, retryDelay)
+		if err := sleepUntil(next); err != nil {
 			return err
 		}
-		if runJob(runner, *next) {
-			succeeded[next.Action] = true
-		}
-		markConsumed(&jobs, next.Label, time.Now().In(loc))
 	}
 }
 
@@ -85,123 +117,42 @@ func dateOnly(t time.Time) time.Time {
 	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
 }
 
-func planJobs(now time.Time) []Job {
-	// Chỉ T2–T6; không chấm T7 / CN.
-	if !isWorkday(now.Weekday()) {
-		return nil
-	}
-	in := pickN(now, AttemptsPerAction, 7, 45, 0, 8, 8, 0, MinGap)
-	out := pickN(now, AttemptsPerAction, 17, 0, 0, 17, 30, 0, MinGap)
-	jobs := make([]Job, 0, 2*AttemptsPerAction)
-	for i, t := range in {
-		jobs = append(jobs, Job{
-			Label:  fmt.Sprintf("check-in lần %d", i+1),
-			Action: "check-in",
-			When:   t,
-		})
-	}
-	for i, t := range out {
-		jobs = append(jobs, Job{
-			Label:  fmt.Sprintf("check-out lần %d", i+1),
-			Action: "check-out",
-			When:   t,
-		})
-	}
-	return jobs
-}
-
-// pickN picks n random times (hour:min:sec) in [h1:m1:s1, h2:m2:s2], ordered
-// ascending, consecutive gaps at least minGap.
-//
-// Random offsets are drawn from the span left over after reserving (n-1)*minGap,
-// then shifted by i*minGap. Rejection sampling would almost never succeed once n
-// gets large relative to the window.
-func pickN(day time.Time, n, h1, m1, s1, h2, m2, s2 int, minGap time.Duration) []time.Time {
-	if n <= 0 {
-		return nil
-	}
+func windowBounds(day time.Time, w actionWindow) (time.Time, time.Time) {
 	loc := day.Location()
-	start := time.Date(day.Year(), day.Month(), day.Day(), h1, m1, s1, 0, loc)
-	end := time.Date(day.Year(), day.Month(), day.Day(), h2, m2, s2, 0, loc)
-	span := int(end.Sub(start).Seconds())
-	if span < 0 {
-		span = 0
-	}
-
-	gap := int(minGap.Seconds())
-	free := span - (n-1)*gap
-	if free < 0 {
-		// Window too small for the requested gap — spread evenly instead.
-		out := make([]time.Time, n)
-		for i := 0; i < n; i++ {
-			sec := 0
-			if n > 1 {
-				sec = span * i / (n - 1)
-			}
-			out[i] = start.Add(time.Duration(sec) * time.Second)
-		}
-		return out
-	}
-
-	offsets := make([]int, n)
-	for i := range offsets {
-		offsets[i] = rand.IntN(free + 1)
-	}
-	sortInts(offsets)
-
-	out := make([]time.Time, n)
-	for i, off := range offsets {
-		out[i] = start.Add(time.Duration(off+i*gap) * time.Second)
-	}
-	return out
+	start := time.Date(day.Year(), day.Month(), day.Day(), w.StartH, w.StartM, w.StartS, 0, loc)
+	end := time.Date(day.Year(), day.Month(), day.Day(), w.EndH, w.EndM, w.EndS, 0, loc)
+	return start, end
 }
 
-func sortInts(v []int) {
-	for i := 1; i < len(v); i++ {
-		j := i
-		for j > 0 && v[j] < v[j-1] {
-			v[j], v[j-1] = v[j-1], v[j]
-			j--
+// activeWindow trả cửa sổ đầu tiên chưa thành công và chưa qua giờ kết thúc.
+func activeWindow(now time.Time, succeeded map[string]bool) *actionWindow {
+	for _, w := range dayWindows() {
+		if succeeded[w.Action] {
+			continue
 		}
-	}
-}
-
-func nextJob(now time.Time, jobs []Job) *Job {
-	for i := range jobs {
-		if jobs[i].When.After(now) {
-			j := jobs[i]
-			return &j
+		_, end := windowBounds(now, w)
+		if !now.Before(end) {
+			continue
 		}
+		cp := w
+		return &cp
 	}
 	return nil
-}
-
-// markConsumed moves a job into the past so nextJob will not pick it again.
-func markConsumed(jobs *[]Job, label string, now time.Time) {
-	for i := range *jobs {
-		if (*jobs)[i].Label == label {
-			(*jobs)[i].When = now.Add(-time.Second)
-			return
-		}
-	}
 }
 
 func isWorkday(d time.Weekday) bool {
 	return d >= time.Monday && d <= time.Friday
 }
 
-func printPlan(now time.Time, jobs []Job) {
-	if len(jobs) == 0 {
+func printPlan(now time.Time) {
+	if !isWorkday(now.Weekday()) {
 		fmt.Printf("=== %s (%s) weekend — no jobs ===\n", now.Format("2006-01-02"), now.Weekday())
 		return
 	}
 	fmt.Printf("=== %s (%s) ===\n", now.Format("2006-01-02"), now.Weekday())
-	for _, j := range jobs {
-		mark := "pending"
-		if !j.When.After(now) {
-			mark = "skipped (already passed)"
-		}
-		fmt.Printf("  %-18s %s  %s\n", j.Label, j.When.Format("15:04:05"), mark)
+	for _, w := range dayWindows() {
+		start, end := windowBounds(now, w)
+		fmt.Printf("  %-12s %s → %s  retry mỗi %s đến khi OK\n", w.Label, start.Format("15:04:05"), end.Format("15:04:05"), retryDelay)
 	}
 }
 
@@ -225,28 +176,28 @@ func sleepUntil(t time.Time) error {
 	return nil
 }
 
-func runJob(runner Runner, job Job) bool {
+func runAttempt(runner Runner, label, action string) bool {
 	now := time.Now().Format("2006-01-02 15:04:05")
-	fmt.Printf("\n=== [%s] %s ===\n", now, job.Label)
+	fmt.Printf("\n=== [%s] %s ===\n", now, label)
 	var err error
-	switch job.Action {
+	switch action {
 	case "check-in":
 		err = runner.CheckIn()
 	case "check-out":
 		err = runner.CheckOut()
 	default:
-		err = fmt.Errorf("unknown action %q", job.Action)
+		err = fmt.Errorf("unknown action %q", action)
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[%s] lần này bỏ qua (đã về Home + xóa đa nhiệm) — đợi job tiếp theo\n", job.Label)
-		logFailure(job, err)
+		fmt.Fprintf(os.Stderr, "[%s] fail (đã về Home + xóa đa nhiệm)\n", label)
+		logFailure(label, action, err)
 		return false
 	}
-	fmt.Printf("=== [%s] completed ===\n", job.Label)
+	fmt.Printf("=== [%s] completed ===\n", label)
 	return true
 }
 
-func logFailure(job Job, err error) {
+func logFailure(label, action string, err error) {
 	_ = os.MkdirAll("logs", 0o755)
 	path := filepath.Join("logs", time.Now().Format("2006-01-02")+".log")
 	f, openErr := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
@@ -257,8 +208,8 @@ func logFailure(job Job, err error) {
 	defer f.Close()
 	line := fmt.Sprintf("%s\t%s\t%s\t%v\n",
 		time.Now().Format("2006-01-02 15:04:05"),
-		job.Label,
-		job.Action,
+		label,
+		action,
 		err,
 	)
 	if _, werr := f.WriteString(line); werr != nil {
