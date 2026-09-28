@@ -13,10 +13,10 @@ const (
 	Package    = "com.people.fis.hdbank.pro"
 	DefaultPIN = "123456"
 
-	// Samsung SM-P619 (Galaxy Tab S6 Lite 2022)
-	ScreenWidth  = 1200
-	ScreenHeight = 2000
-	StepDelay    = 3 * time.Second
+	// Kích thước tham chiếu Vsmart Active 1+ (1080×2260). Máy khác scale theo wm size.
+	refScreenWidth  = 1080
+	refScreenHeight = 2260
+	StepDelay       = 3 * time.Second
 
 	EnableAttendanceAction = true
 	EnableConfirmAction    = true
@@ -34,23 +34,35 @@ const (
 	ConfirmLabel    = "XÁC NHẬN"
 )
 
-// Fallback tọa độ SM-P619 1200×2000. Chỉ dùng khi đã thử hết label.
-// CHECK-OUT (876,686) là tâm nút lúc tap đúng bằng chữ; CHECK-IN đối xứng.
-// Wifi là tâm ô bấm [51,750][419,1018] trên màn home.
+// Fallback tọa độ đo trên Vsmart Active 1+ 1080×2260. Chỉ dùng khi đã thử hết label.
+// Wifi [46,855][377,1143], CHECK-IN [52,565][530,695], CHECK-OUT [550,565][1028,695].
 var (
-	WifiMenuButton = [2]int{235, 884}
-	CheckInButton  = [2]int{324, 686}
-	CheckOutButton = [2]int{876, 686}
-	// Center of popup button bounds [886,1019][1037,1100] from live dump.
-	ConfirmButton = [2]int{961, 1059}
+	WifiMenuButton = [2]int{211, 999}
+	CheckInButton  = [2]int{291, 630}
+	CheckOutButton = [2]int{789, 630}
+	// Popup XÁC NHẬN đo lúc check-in thật: tâm (900, 1226).
+	ConfirmButton = [2]int{900, 1226}
 )
 
 type Runner struct {
-	adb *adb.Client
+	adb          *adb.Client
+	screenWidth  int
+	screenHeight int
 }
 
 func NewRunner(client *adb.Client) *Runner {
-	return &Runner{adb: client}
+	w, h := refScreenWidth, refScreenHeight
+	if sw, sh, err := client.ScreenSize(); err == nil {
+		w, h = sw, sh
+		fmt.Printf("screen %dx%d\n", w, h)
+	}
+	return &Runner{adb: client, screenWidth: w, screenHeight: h}
+}
+
+func (r *Runner) pt(ref [2]int) (int, int) {
+	x := ref[0] * r.screenWidth / refScreenWidth
+	y := ref[1] * r.screenHeight / refScreenHeight
+	return x, y
 }
 
 func (r *Runner) CheckIn() error {
@@ -74,7 +86,7 @@ func (r *Runner) run(action string) (err error) {
 	}
 
 	fmt.Printf("[%s] swipe up (lần 1) — mở khóa...\n", action)
-	if err := r.adb.SwipeUpUnlock(ScreenWidth, ScreenHeight); err != nil {
+	if err := r.adb.SwipeUpUnlock(r.screenWidth, r.screenHeight); err != nil {
 		return err
 	}
 	r.wait()
@@ -87,7 +99,7 @@ func (r *Runner) run(action string) (err error) {
 		fmt.Printf("[%s] skip swipe up (lần 2) — đã thấy %s\n", action, AppLabel)
 	} else {
 		fmt.Printf("[%s] swipe up (lần 2) — về trang app...\n", action)
-		if err := r.adb.SwipeUpHome(ScreenWidth, ScreenHeight); err != nil {
+		if err := r.adb.SwipeUpHome(r.screenWidth, r.screenHeight); err != nil {
 			return err
 		}
 		r.wait()
@@ -133,12 +145,13 @@ func (r *Runner) run(action string) (err error) {
 	}
 	x, y, matched, err := r.adb.WaitAndTapAnyContains(UIWaitTimeout, wifiNeedles...)
 	if err != nil {
-		fmt.Printf("[%s] wifi label not found — tap fallback (%d, %d)\n", action, WifiMenuButton[0], WifiMenuButton[1])
-		if err := r.adb.Tap(WifiMenuButton[0], WifiMenuButton[1]); err != nil {
+		fx, fy := r.pt(WifiMenuButton)
+		fmt.Printf("[%s] wifi label not found — tap fallback (%d, %d)\n", action, fx, fy)
+		if err := r.adb.Tap(fx, fy); err != nil {
 			r.saveMiss(action, "wifi_menu")
 			return fmt.Errorf("open wifi menu: %w", err)
 		}
-		x, y = WifiMenuButton[0], WifiMenuButton[1]
+		x, y = fx, fy
 		matched = "coords"
 	}
 	fmt.Printf("[%s] tapped wifi menu (%q) at (%d, %d)\n", action, matched, x, y)
@@ -156,12 +169,13 @@ func (r *Runner) run(action string) (err error) {
 	if EnableAttendanceAction {
 		x, y, matched, err = r.adb.WaitAndTapAnyContains(UIWaitTimeout, checkNeedles...)
 		if err != nil {
-			fmt.Printf("[%s] %s label not found — tap fallback (%d, %d)\n", action, checkLabel, checkPoint[0], checkPoint[1])
-			if err := r.adb.Tap(checkPoint[0], checkPoint[1]); err != nil {
+			fx, fy := r.pt(checkPoint)
+			fmt.Printf("[%s] %s label not found — tap fallback (%d, %d)\n", action, checkLabel, fx, fy)
+			if err := r.adb.Tap(fx, fy); err != nil {
 				r.saveMiss(action, strings.ToLower(checkLabel))
 				return fmt.Errorf("tap %s coords: %w", checkLabel, err)
 			}
-			x, y = checkPoint[0], checkPoint[1]
+			x, y = fx, fy
 			matched = "coords"
 		}
 		fmt.Printf("[%s] tapped %s (%q) at (%d, %d)\n", action, checkLabel, matched, x, y)
@@ -211,9 +225,12 @@ func (r *Runner) resetToCleanState(action string) error {
 	}
 	r.wait()
 
-	fmt.Printf("[%s] opening recents (tap |||)...\n", action)
-	if err := r.adb.OpenRecentsByNavTap(); err != nil {
-		_ = r.adb.OpenRecents()
+	fmt.Printf("[%s] opening recents...\n", action)
+	if err := r.adb.OpenRecents(); err != nil {
+		rx := r.screenWidth * 5 / 6
+		ry := r.screenHeight - 80
+		fmt.Printf("[%s] recents key failed — tap nav (%d, %d)\n", action, rx, ry)
+		_ = r.adb.Tap(rx, ry)
 	}
 	r.wait()
 
@@ -250,9 +267,11 @@ func (r *Runner) clearRecents(action string) error {
 		return nil
 	}
 
-	// Fallback: swipe People HDBank card region up (SM-P619 card ~[636,259][975,835]).
 	fmt.Printf("[%s] Đóng tất cả not found — swipe card up\n", action)
-	return r.adb.Swipe(805, 650, 805, 80, 450)
+	x := r.screenWidth / 2
+	fromY := r.screenHeight / 2
+	toY := r.screenHeight / 8
+	return r.adb.Swipe(x, fromY, x, toY, 450)
 }
 
 func (r *Runner) tapConfirm(action string) error {
@@ -275,8 +294,9 @@ func (r *Runner) tapConfirm(action string) error {
 			return fmt.Errorf("tap confirm: %w", err)
 		}
 	} else {
-		fmt.Printf("[%s] tapping confirm fallback at (%d, %d)\n", action, ConfirmButton[0], ConfirmButton[1])
-		if err := r.adb.Tap(ConfirmButton[0], ConfirmButton[1]); err != nil {
+		cx, cy := r.pt(ConfirmButton)
+		fmt.Printf("[%s] tapping confirm fallback at (%d, %d)\n", action, cx, cy)
+		if err := r.adb.Tap(cx, cy); err != nil {
 			return fmt.Errorf("tap confirm fallback: %w", err)
 		}
 	}

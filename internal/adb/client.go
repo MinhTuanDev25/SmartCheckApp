@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -23,6 +24,39 @@ func New(binary, device string) *Client {
 		binary = "adb"
 	}
 	return &Client{binary: binary, device: device}
+}
+
+// ScreenSize returns the current pixel size from `wm size`.
+// Override size wins when present; otherwise Physical size.
+func (c *Client) ScreenSize() (int, int, error) {
+	out, err := c.deviceCmd("shell", "wm", "size")
+	if err != nil {
+		return 0, 0, err
+	}
+	var physical, override string
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "Physical size:"):
+			physical = strings.TrimSpace(strings.TrimPrefix(line, "Physical size:"))
+		case strings.HasPrefix(line, "Override size:"):
+			override = strings.TrimSpace(strings.TrimPrefix(line, "Override size:"))
+		}
+	}
+	raw := override
+	if raw == "" {
+		raw = physical
+	}
+	parts := strings.Split(raw, "x")
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("wm size: %q", out)
+	}
+	w, err1 := strconv.Atoi(parts[0])
+	h, err2 := strconv.Atoi(parts[1])
+	if err1 != nil || err2 != nil || w <= 0 || h <= 0 {
+		return 0, 0, fmt.Errorf("wm size: %q", out)
+	}
+	return w, h, nil
 }
 
 func (c *Client) FirstDevice() (string, error) {
