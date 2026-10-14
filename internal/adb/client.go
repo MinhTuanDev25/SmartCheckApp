@@ -119,15 +119,9 @@ func (c *Client) SwipeUpUnlock(screenWidth, screenHeight int) error {
 	return nil
 }
 
-// LockscreenShowing reports whether the keyguard is up. Unlocked home screens
-// must not be swiped — a swipe there changes launcher pages and hides icons.
-func (c *Client) LockscreenShowing() (bool, error) {
-	out, err := c.deviceCmd("shell", "dumpsys", "window")
-	if err != nil {
-		return false, err
-	}
-	return strings.Contains(out, "mShowingLockscreen=true") ||
-		strings.Contains(out, "mDreamingLockscreen=true"), nil
+// DismissKeyguard clears a swipe lock screen. It does not move launcher pages.
+func (c *Client) DismissKeyguard() (string, error) {
+	return c.deviceCmd("shell", "wm", "dismiss-keyguard")
 }
 
 // LaunchApp starts the app's launcher activity without tapping an icon.

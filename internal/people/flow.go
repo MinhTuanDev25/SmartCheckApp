@@ -84,22 +84,11 @@ func (r *Runner) run(action string) (err error) {
 	if err := r.adb.Wake(); err != nil {
 		return err
 	}
+	// Không dumpsys window và không vuốt. dumpsys làm rớt USB; vuốt khi màn hình
+	// đang sáng thì đẩy icon sang trang khác.
+	_, _ = r.adb.DismissKeyguard()
 
-	locked, err := r.adb.LockscreenShowing()
-	if err != nil {
-		return fmt.Errorf("check lockscreen: %w", err)
-	}
-	if locked {
-		fmt.Printf("[%s] lockscreen — swipe up để mở khóa...\n", action)
-		if err := r.adb.SwipeUpUnlock(r.screenWidth, r.screenHeight); err != nil {
-			return err
-		}
-		r.wait()
-	} else {
-		fmt.Printf("[%s] màn hình đang mở — không vuốt\n", action)
-	}
-
-	fmt.Printf("[%s] mở %s bằng lệnh...\n", action, AppLabel)
+	fmt.Printf("[%s] mở %s bằng lệnh, không vuốt...\n", action, AppLabel)
 	if err := r.adb.ForceStop(Package); err != nil {
 		return fmt.Errorf("force-stop before launch: %w", err)
 	}
