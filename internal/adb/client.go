@@ -119,6 +119,26 @@ func (c *Client) SwipeUpUnlock(screenWidth, screenHeight int) error {
 	return nil
 }
 
+// LockscreenShowing reports whether the keyguard is up. Unlocked home screens
+// must not be swiped — a swipe there changes launcher pages and hides icons.
+func (c *Client) LockscreenShowing() (bool, error) {
+	out, err := c.deviceCmd("shell", "dumpsys", "window")
+	if err != nil {
+		return false, err
+	}
+	return strings.Contains(out, "mShowingLockscreen=true") ||
+		strings.Contains(out, "mDreamingLockscreen=true"), nil
+}
+
+// LaunchApp starts the app's launcher activity without tapping an icon.
+func (c *Client) LaunchApp(pkg string) error {
+	_, err := c.deviceCmd("shell", "am", "start",
+		"-a", "android.intent.action.MAIN",
+		"-c", "android.intent.category.LAUNCHER",
+		"-p", pkg)
+	return err
+}
+
 // SwipeUpHome swipes on the launcher to the page with app icons.
 func (c *Client) SwipeUpHome(screenWidth, screenHeight int) error {
 	midX := screenWidth / 2

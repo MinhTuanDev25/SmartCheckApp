@@ -80,37 +80,33 @@ func (r *Runner) run(action string) (err error) {
 		}
 	}()
 
-	fmt.Printf("[%s] waking tablet...\n", action)
+	fmt.Printf("[%s] waking...\n", action)
 	if err := r.adb.Wake(); err != nil {
 		return err
 	}
 
-	fmt.Printf("[%s] swipe up (lần 1) — mở khóa...\n", action)
-	if err := r.adb.SwipeUpUnlock(r.screenWidth, r.screenHeight); err != nil {
-		return err
-	}
-	r.wait()
-
-	visible, err := r.adb.HasLabel(AppLabel)
+	locked, err := r.adb.LockscreenShowing()
 	if err != nil {
-		return fmt.Errorf("check screen: %w", err)
+		return fmt.Errorf("check lockscreen: %w", err)
 	}
-	if visible {
-		fmt.Printf("[%s] skip swipe up (lần 2) — đã thấy %s\n", action, AppLabel)
-	} else {
-		fmt.Printf("[%s] swipe up (lần 2) — về trang app...\n", action)
-		if err := r.adb.SwipeUpHome(r.screenWidth, r.screenHeight); err != nil {
+	if locked {
+		fmt.Printf("[%s] lockscreen — swipe up để mở khóa...\n", action)
+		if err := r.adb.SwipeUpUnlock(r.screenWidth, r.screenHeight); err != nil {
 			return err
 		}
 		r.wait()
+	} else {
+		fmt.Printf("[%s] màn hình đang mở — không vuốt\n", action)
 	}
 
-	fmt.Printf("[%s] finding %s...\n", action, AppLabel)
-	x, y, err := r.adb.TapByLabel(AppLabel)
-	if err != nil {
+	fmt.Printf("[%s] mở %s bằng lệnh...\n", action, AppLabel)
+	if err := r.adb.ForceStop(Package); err != nil {
+		return fmt.Errorf("force-stop before launch: %w", err)
+	}
+	r.adb.Sleep(500 * time.Millisecond)
+	if err := r.adb.LaunchApp(Package); err != nil {
 		return fmt.Errorf("open app: %w", err)
 	}
-	fmt.Printf("[%s] tapped %s at (%d, %d)\n", action, AppLabel, x, y)
 	r.wait()
 
 	fmt.Printf("[%s] entering PIN...\n", action)
@@ -125,7 +121,7 @@ func (r *Runner) run(action string) (err error) {
 	if !onPIN {
 		return fmt.Errorf("PIN screen not shown (missing %q)", PINFieldLabel)
 	}
-	x, y, err = r.adb.TapByLabelContains(PINFieldLabel)
+	x, y, err := r.adb.TapByLabelContains(PINFieldLabel)
 	if err != nil {
 		return fmt.Errorf("focus PIN field: %w", err)
 	}
