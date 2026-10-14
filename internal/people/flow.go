@@ -80,22 +80,25 @@ func (r *Runner) run(action string) (err error) {
 		}
 	}()
 
-	fmt.Printf("[%s] waking...\n", action)
+	fmt.Printf("[%s] waking tablet...\n", action)
 	if err := r.adb.Wake(); err != nil {
 		return err
 	}
-	// Không dumpsys window và không vuốt. dumpsys làm rớt USB; vuốt khi màn hình
-	// đang sáng thì đẩy icon sang trang khác.
-	_, _ = r.adb.DismissKeyguard()
 
-	fmt.Printf("[%s] mở %s bằng lệnh, không vuốt...\n", action, AppLabel)
-	if err := r.adb.ForceStop(Package); err != nil {
-		return fmt.Errorf("force-stop before launch: %w", err)
+	// Màn hình đang sáng thì vuốt lên sẽ mở ngăn kéo app và che icon.
+	// Chỉ bấm Home rồi bấm đúng chữ People HDBank.
+	fmt.Printf("[%s] về Home — không vuốt...\n", action)
+	if err := r.adb.Home(); err != nil {
+		return err
 	}
-	r.adb.Sleep(500 * time.Millisecond)
-	if err := r.adb.LaunchApp(Package); err != nil {
+	r.wait()
+
+	fmt.Printf("[%s] finding %s...\n", action, AppLabel)
+	x, y, err := r.adb.TapByLabel(AppLabel)
+	if err != nil {
 		return fmt.Errorf("open app: %w", err)
 	}
+	fmt.Printf("[%s] tapped %s at (%d, %d)\n", action, AppLabel, x, y)
 	r.wait()
 
 	fmt.Printf("[%s] entering PIN...\n", action)
@@ -110,7 +113,7 @@ func (r *Runner) run(action string) (err error) {
 	if !onPIN {
 		return fmt.Errorf("PIN screen not shown (missing %q)", PINFieldLabel)
 	}
-	x, y, err := r.adb.TapByLabelContains(PINFieldLabel)
+	x, y, err = r.adb.TapByLabelContains(PINFieldLabel)
 	if err != nil {
 		return fmt.Errorf("focus PIN field: %w", err)
 	}

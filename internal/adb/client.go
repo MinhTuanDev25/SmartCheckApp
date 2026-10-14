@@ -119,20 +119,6 @@ func (c *Client) SwipeUpUnlock(screenWidth, screenHeight int) error {
 	return nil
 }
 
-// DismissKeyguard clears a swipe lock screen. It does not move launcher pages.
-func (c *Client) DismissKeyguard() (string, error) {
-	return c.deviceCmd("shell", "wm", "dismiss-keyguard")
-}
-
-// LaunchApp starts the app's launcher activity without tapping an icon.
-func (c *Client) LaunchApp(pkg string) error {
-	_, err := c.deviceCmd("shell", "am", "start",
-		"-a", "android.intent.action.MAIN",
-		"-c", "android.intent.category.LAUNCHER",
-		"-p", pkg)
-	return err
-}
-
 // SwipeUpHome swipes on the launcher to the page with app icons.
 func (c *Client) SwipeUpHome(screenWidth, screenHeight int) error {
 	midX := screenWidth / 2
