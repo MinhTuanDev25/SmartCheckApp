@@ -215,7 +215,8 @@ func (r *Runner) emergencyCleanup(action string, cause error) {
 	fmt.Printf("[%s] cleanup done — schedule sẽ chạy tiếp bình thường\n", action)
 }
 
-// resetToCleanState: force-stop → Home → ||| → Đóng tất cả → Home → sleep.
+// resetToCleanState: force-stop → Home → ||| → Đóng tất cả → Home.
+// Màn hình giữ sáng để USB/ADB không rớt qua đêm khi đang sạc.
 func (r *Runner) resetToCleanState(action string) error {
 	_ = r.adb.ForceStop(Package)
 	r.adb.Sleep(1 * time.Second)
@@ -241,9 +242,6 @@ func (r *Runner) resetToCleanState(action string) error {
 	fmt.Printf("[%s] back to home...\n", action)
 	_ = r.adb.Home()
 	r.wait()
-
-	fmt.Printf("[%s] putting tablet to sleep...\n", action)
-	_ = r.adb.ScreenOff()
 	return nil
 }
 

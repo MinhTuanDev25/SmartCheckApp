@@ -93,10 +93,9 @@ func (c *Client) Home() error {
 
 const screenOnDelay = 1200 * time.Millisecond
 
-// Wake turns the screen on from sleep/doze (Samsung tablet).
+// Wake turns the screen on. KEYCODE_WAKEUP does not toggle an already-on screen
+// the way KEYCODE_POWER does, so a lit phone stays lit.
 func (c *Client) Wake() error {
-	_ = c.KeyEvent(26) // KEYCODE_POWER — bật màn hình
-	c.Sleep(400 * time.Millisecond)
 	_ = c.KeyEvent(224) // KEYCODE_WAKEUP
 	c.Sleep(screenOnDelay)
 	return nil
